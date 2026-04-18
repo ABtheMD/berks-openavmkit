@@ -1321,6 +1321,38 @@ def run_one_model(
             hedonic=hedonic,
             hedonic_test_against_vacant_sales=True,
         )
+        
+    # safeguards against invalid splits
+    n_sales = len(ds.df_sales) if ds.df_sales is not None else 0
+    n_train = len(ds.df_train) if ds.df_train is not None else 0
+    n_test  = len(ds.df_test)  if ds.df_test  is not None else 0
+    p = ds.X_train.shape[1] if getattr(ds, "X_train", None) is not None else 0
+    
+    if n_train == 0 or p == 0:
+        # compute some helpful diagnostics
+        missing_vars = []
+        if p == 0:
+            # requested vars that are not present in train
+            train_cols = set(ds.df_train.columns) if ds.df_train is not None else set()
+            missing_vars = [v for v in ds.ind_vars if v not in train_cols]
+    
+        why = []
+        if n_train == 0:
+            if n_test == n_sales and n_sales > 0:
+                why.append("all sales ended up in the test split (train set empty) — check split keys")
+            else:
+                why.append("filters/slicing removed all training rows")
+        if p == 0:
+            why.append(f"no usable features in X_train (missing ind_vars: {missing_vars[:20]}{'...' if len(missing_vars)>20 else ''})")
+    
+        warnings.warn(
+            f"Skipping model {model_group}/{model_name} ({model_engine}): "
+            f"sales={n_sales}, train={n_train}, test={n_test}, X_train_cols={p}. "
+            + " ".join(why),
+            RuntimeWarning
+        )
+        return None
+    
     t.stop("data split")
 
     t.start("setup")
