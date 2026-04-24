@@ -6047,6 +6047,13 @@ def write_shaps(
     ind_vars_sales = [v for v in ind_vars if v in smr.df_sales.columns]
     ind_vars_univ = [v for v in ind_vars if v in smr.df_universe.columns]
     
+    ind_vars_by_subset = {
+        "train": ind_vars_train,
+        "test" : ind_vars_test,
+        "sales": ind_vars_sales,
+        "univ" : ind_vars_univ
+    }
+    
     X_train = smr.df_train[ind_vars_train].copy()
     X_test = smr.df_test[ind_vars_test].copy()
     X_sales = smr.df_sales[ind_vars_sales].copy()
@@ -6077,7 +6084,7 @@ def write_shaps(
             model,
             shap_entry,
             df,
-            ind_vars,
+            ind_vars_by_subset[subset],
             subset,
             outpath,
             do_plot=do_plot,
@@ -6122,7 +6129,7 @@ def _prepare_shap_dfs(
     # Check for divergent baseline due to approximate shap calculation
     
     ## get the same feature matrix used for SHAP (X_to_explain)
-    X_to_explain = df[list_vars]
+    X_to_explain = df[list_vars].copy()
 
     ## raw model predictions on those exact rows
 
@@ -6134,7 +6141,15 @@ def _prepare_shap_dfs(
     
     cat_data = model.cat_data
     if cat_data is not None and len(cat_data.categorical_cols) > 0:
-        X_to_explain = cat_data.apply(X_to_explain, fill_missing_cat=isinstance(model, CatBoostModel))
+        # apply dtype enforcement but stay within list_vars, not full feature_names
+        for c in cat_data.bool_cols:
+            if c in X_to_explain.columns:
+                X_to_explain[c] = X_to_explain[c].astype("boolean")
+        for c, levels in cat_data.category_levels.items():
+            if c in X_to_explain.columns:
+                X_to_explain[c] = pd.Categorical(X_to_explain[c], categories=levels)
+                if isinstance(model, CatBoostModel):
+                    X_to_explain[c] = X_to_explain[c].astype("string").fillna("__MISSING__")
     else:
         X_to_explain = X_to_explain.to_numpy()
     
