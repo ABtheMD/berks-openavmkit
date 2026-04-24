@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import warnings
 from openavmkit.utilities.stats import ConfidenceStat, calc_ratio_stats_bootstrap, calc_prb
 
 class VerticalEquityStudy:
@@ -60,9 +61,13 @@ class VerticalEquityStudy:
         # Calculate quantiles (grouped price)
         #------------------------------------------
         
-        df_sales["quantile"] = _calc_grouped_quantiles(df_sales_in, field_sales, field_location)
-        df = _assemble_quantile_df(df_sales, field_sales,  field_prediction, confidence_interval, iterations, seed)
-        self.grouped_quantiles = df
+        if field_location is not None and field_location in df_sales_in.columns:
+            df_sales["quantile"] = _calc_grouped_quantiles(df_sales_in, field_sales, field_location)
+            df = _assemble_quantile_df(df_sales, field_sales,  field_prediction, confidence_interval, iterations, seed)
+            self.grouped_quantiles = df
+        else:
+            warnings.warn(f"VerticalEquityStudy: could not find location field, \"{field_location}\" in sales dataframe")
+            self.grouped_quantiles = None
  
     
     def summary(self):
