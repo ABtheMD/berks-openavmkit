@@ -122,6 +122,9 @@ class VerticalEquityStudy:
         grouped=False
     ):
         df = self.grouped_quantiles if grouped else self.quantiles
+        if df is None:
+            warnings.warn(f"No quantile data available to plot.")
+            return
         conf = f"{self.confidence_interval*100:0.0f}"
         
         max_y = df['ratio_high'].max()
