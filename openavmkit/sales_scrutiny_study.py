@@ -471,6 +471,7 @@ def _run_land_percentiles(sup: SalesUniversePair, settings: dict):
         ].rank(pct=True)
         cols = [
             "key_sale",
+            "model_group",
             "sale_date",
             "sale_price",
             "sale_price_time_adj",
@@ -745,7 +746,7 @@ def run_heuristics(
             f"Identified {len(bad_keys)} invalid sales keys identified by heuristic, but not dropping them"
         )
 
-    _run_land_percentiles(sup, settings)
+    #_run_land_percentiles(sup, settings)
 
     return sup
 
