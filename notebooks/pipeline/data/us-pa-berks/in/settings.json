@@ -17,23 +17,35 @@
       "geo_parcels": {
         "__note": "File produced by the data-download step for source 'geo_parcels'. Adjust the filename if your download pipeline uses a different name.",
         "filename": "geo_parcels.parquet",
-        "load": {},
+        "load": {
+          "key": "propid",
+          "class": "class"
+        },
         "geometry": true
       },
       "cama_master": {
         "__note": "File produced by the data-download step for source 'cama_master'. Adjust the filename if your download pipeline uses a different name.",
         "filename": "cama_master.parquet",
-        "load": {}
+        "load": {
+          "key": "parid",
+          "class": "class"
+        }
       },
       "cama_residential": {
         "__note": "File produced by the data-download step for source 'cama_residential'. Adjust the filename if your download pipeline uses a different name.",
         "filename": "cama_residential.parquet",
-        "load": {}
+        "load": {
+          "key": "parid",
+          "class": "class"
+        }
       },
       "cama_commercial": {
         "__note": "File produced by the data-download step for source 'cama_commercial'. Adjust the filename if your download pipeline uses a different name.",
         "filename": "cama_commercial.parquet",
-        "load": {}
+        "load": {
+          "key": "parid",
+          "class": "class"
+        }
       }
     }
   },
@@ -82,25 +94,32 @@
     },
     "modeling_groups": {
       "res": {
-        "name": "Residential"
+        "name": "Residential",
+        "filter": ["==", "class", "R"]
       },
       "com": {
-        "name": "Commercial"
+        "name": "Commercial",
+        "filter": ["==", "class", "C"]
       },
       "ag": {
-        "name": "Agricultural"
+        "name": "Agricultural",
+        "filter": ["==", "class", "A"]
       },
       "farm": {
-        "name": "Farmland / Forest"
+        "name": "Farmland / Forest",
+        "filter": ["==", "class", "F"]
       },
       "ind": {
-        "name": "Industrial"
+        "name": "Industrial",
+        "filter": ["==", "class", "I"]
       },
       "exempt": {
-        "name": "Tax Exempt"
+        "name": "Tax Exempt",
+        "filter": ["==", "class", "E"]
       },
       "util": {
-        "name": "Utility"
+        "name": "Utility",
+        "filter": ["==", "class", "UT"]
       }
     }
   },
