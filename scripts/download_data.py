@@ -10,9 +10,14 @@ NOTE: This script downloads actual data records — it may take several
 minutes for large layers.  The settings generator (generate_settings.py)
 only touches field metadata; this script downloads the rows.
 
+Geometry is detected automatically from the ArcGIS layer metadata
+(geometryType field) rather than inferred from the source role.  This
+means flat files with point geometry (e.g. Philadelphia OPA) are saved
+as GeoParquet correctly, not as plain tabular parquet.
+
 After downloading, the script also patches any settings.json found in
 the output directory to:
-  - add  "geometry": true  for the geo_parcels entry
+  - add  "geometry": true  for any source whose layer has geometry
   - rename  "dtypes": {}   →  "load": {}  (pipeline key name)
 
 Usage:
@@ -47,9 +52,6 @@ except ImportError:
 # Constants
 # ---------------------------------------------------------------------------
 
-# Source roles that carry geometry — saved as GeoParquet
-GEO_ROLES = {"geo_parcels"}
-
 # Default records-per-page for ArcGIS pagination
 DEFAULT_PAGE_SIZE = 1000
 
@@ -60,6 +62,29 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 # ---------------------------------------------------------------------------
 # ArcGIS helpers
 # ---------------------------------------------------------------------------
+
+def get_layer_geometry_type(url: str) -> str | None:
+    """
+    Query ArcGIS layer metadata to determine whether the layer carries geometry.
+
+    Returns the geometryType string (e.g. 'esriGeometryPolygon',
+    'esriGeometryPoint', 'esriGeometryMultipoint') if the layer has geometry,
+    or None if it is purely tabular.
+
+    This is more reliable than inferring geometry from the source role because
+    some layers with non-standard roles (e.g. 'flat') still carry geometry
+    — Philadelphia's OPA dataset is a real example (point geometry on a flat file).
+    """
+    meta_url = url.rstrip("/") + "?f=json"
+    try:
+        resp = requests.get(meta_url, timeout=30)
+        resp.raise_for_status()
+        geometry_type = resp.json().get("geometryType")
+        return geometry_type if geometry_type else None
+    except Exception as exc:
+        print(f"    [!] Could not fetch layer metadata: {exc}", file=sys.stderr)
+        return None
+
 
 def get_record_count(url: str) -> int:
     """
@@ -207,15 +232,19 @@ def download_tabular_source(url: str, handle: str, page_size: int) -> "pd.DataFr
 # Settings.json patcher
 # ---------------------------------------------------------------------------
 
-def patch_settings_json(settings_path: Path, sources: list[dict]) -> None:
+def patch_settings_json(settings_path: Path, geo_handles: set[str]) -> None:
     """
     Patch an existing settings.json after downloading:
 
     1. Rename  "dtypes": {}  →  "load": {}  in each data.load entry
        (openavmkit's loader uses the "load" key, not "dtypes")
 
-    2. Add  "geometry": true  to any data.load entry whose handle
-       corresponds to a geo_roles source (e.g. geo_parcels)
+    2. Add  "geometry": true  to any data.load entry whose handle is in
+       geo_handles — the set of handles whose layers were found to carry
+       geometry during the download step.
+
+    geo_handles is determined by live ArcGIS metadata inspection, not by
+    role name, so flat files with geometry are handled correctly.
     """
     if not settings_path.exists():
         print(
@@ -228,7 +257,6 @@ def patch_settings_json(settings_path: Path, sources: list[dict]) -> None:
     with open(settings_path, encoding="utf-8") as fh:
         settings = json.load(fh)
 
-    geo_handles = {s["handle"] for s in sources if s.get("role") in GEO_ROLES}
     changed = False
 
     for handle, entry in settings.get("data", {}).get("load", {}).items():
@@ -322,6 +350,7 @@ Examples:
     # ------------------------------------------------------------------
     # Download each source
     failed: list[str] = []
+    geo_handles: set[str] = set()  # handles whose layers have geometry
 
     for source in sources:
         handle      = source.get("handle", "")
@@ -338,8 +367,14 @@ Examples:
             )
             continue
 
+        # Auto-detect geometry from ArcGIS layer metadata
+        geometry_type = get_layer_geometry_type(url)
+        is_geo = geometry_type is not None
+        if is_geo:
+            print(f"    Geometry      : {geometry_type}", file=sys.stderr)
+            geo_handles.add(handle)
+
         out_file = out_dir / f"{handle}.parquet"
-        is_geo   = role in GEO_ROLES
 
         try:
             if is_geo:
@@ -367,7 +402,7 @@ Examples:
     # ------------------------------------------------------------------
     # Patch settings.json if present
     print("[→] Checking for settings.json to patch...", file=sys.stderr)
-    patch_settings_json(out_dir / "settings.json", seed.get("sources", []))
+    patch_settings_json(out_dir / "settings.json", geo_handles)
 
     # ------------------------------------------------------------------
     # Final summary
