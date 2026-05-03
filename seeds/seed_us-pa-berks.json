@@ -1,0 +1,40 @@
+{
+  "locality": {
+    "name": "Berks County",
+    "county": "Berks",
+    "state": "PA",
+    "slug": "us-pa-berks",
+    "units": "imperial",
+    "assessment_context": "Last countywide reassessment effective tax year 1994 (reflecting 1993 market conditions). A median ratio of 0.30–0.40 is expected and legally defensible under Pennsylvania law. The PA STEB Common Level Ratio adjusts appeals to current market value annually.",
+    "center": {
+      "latitude": 40.416953,
+      "longitude": -75.995078
+    }
+  },
+  "sources": [
+    {
+      "handle": "geo_parcels",
+      "role": "geo_parcels",
+      "type": "feature_server",
+      "url": "https://services3.arcgis.com/dGYe1jDYrTw1wwpc/ArcGIS/rest/services/Berks_County_Parcels/FeatureServer/0"
+    },
+    {
+      "handle": "cama_master",
+      "role": "cama_master",
+      "type": "feature_server",
+      "url": "https://services3.arcgis.com/dGYe1jDYrTw1wwpc/ArcGIS/rest/services/Berks_Assessment_CAMA_Master_File/FeatureServer/14"
+    },
+    {
+      "handle": "cama_residential",
+      "role": "cama_residential",
+      "type": "feature_server",
+      "url": "https://services3.arcgis.com/dGYe1jDYrTw1wwpc/ArcGIS/rest/services/Berks_Assessment_CAMA_Residential_File/FeatureServer/15"
+    },
+    {
+      "handle": "cama_commercial",
+      "role": "cama_commercial",
+      "type": "feature_server",
+      "url": "https://services3.arcgis.com/dGYe1jDYrTw1wwpc/ArcGIS/rest/services/Berks_Assessment_CAMA_Commercial_File/FeatureServer/13"
+    }
+  ]
+}

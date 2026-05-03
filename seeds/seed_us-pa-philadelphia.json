@@ -1,0 +1,22 @@
+{
+  "locality": {
+    "name": "Philadelphia",
+    "county": "Philadelphia",
+    "state": "PA",
+    "slug": "us-pa-philadelphia",
+    "units": "imperial",
+    "assessment_context": "Philadelphia conducts annual reassessments through the Office of Property Assessment (OPA). The city reassessed all properties in 2023 for the first time in a decade, so median ratios should be close to 1.0. Philadelphia uses a category_code system rather than a single class field: category 1 = residential, 2 = hotels/apartments, 3 = store with dwelling, 4 = commercial, 5 = industrial, 6 = vacant land. Note: the OPA dataset is a flat file with point geometry (parcel centroids, not polygons), so geometric area variables will not be available.",
+    "center": {
+      "latitude": 39.952583,
+      "longitude": -75.165222
+    }
+  },
+  "sources": [
+    {
+      "handle": "opa_properties",
+      "role": "flat",
+      "type": "feature_server",
+      "url": "https://services.arcgis.com/fLeGjb7u4uXqeF9q/ArcGIS/rest/services/OPA_PROPERTIES_PUBLIC/FeatureServer/0"
+    }
+  ]
+}
