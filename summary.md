@@ -80,3 +80,61 @@ python scripts/generate_settings.py seeds/seed_us-pa-berks.json --dry-run
 - `data.load` filenames — assumes `{handle}.parquet`; adjust if download pipeline uses different names
 
 ---
+
+## feature/data-downloader
+
+**Branch:** `feature/data-downloader`
+**Date:** 2026-05-02
+**Status:** In progress
+
+### Goal
+Build a data downloader that fetches actual parquet/geoparquet files from
+the ArcGIS Feature Server URLs in a seed file, saving them to the correct
+location for the openavmkit pipeline to consume.
+
+### Files changed
+| File | Change |
+|---|---|
+| `scripts/download_data.py` | New — the downloader script |
+| `scripts/generate_settings.py` | Fix — `"dtypes": {}` → `"load": {}`, add `"geometry": true` for geo_parcels |
+
+### How the script works
+1. Reads a seed file — same format used by `generate_settings.py`
+2. For each `feature_server` source, paginates through all records via ArcGIS `/query` endpoint
+3. **geo_parcels role**: fetches as GeoJSON (`f=geojson&outSR=4326`), saves as GeoParquet via geopandas
+4. **All other roles**: fetches as JSON attributes only, saves as plain parquet via pandas
+5. All column names are lowercased for consistency with openavmkit conventions
+6. After downloading, patches any `settings.json` found in the output directory:
+   - Adds `"geometry": true` to the `geo_parcels` load entry
+   - Renames `"dtypes": {}` → `"load": {}` (pipeline expects this key)
+
+### Usage
+```bash
+# Download all sources for Berks County
+python scripts/download_data.py seeds/seed_us-pa-berks.json
+# → saves to notebooks/pipeline/data/us-pa-berks/in/
+
+# Download a single source (useful for testing)
+python scripts/download_data.py seeds/seed_us-pa-berks.json --source geo_parcels
+
+# Custom output directory
+python scripts/download_data.py seeds/seed_us-pa-berks.json --out-dir path/to/in/
+
+# Larger page size for faster servers
+python scripts/download_data.py seeds/seed_us-pa-berks.json --page-size 2000
+```
+
+### Pipeline input requirements (discovered during design)
+- Files must live at `notebooks/pipeline/data/{slug}/in/`
+- `geo_parcels` is **required** by the pipeline and must have a `geometry` column
+- Non-geo sources (CAMA tables) are plain parquet, no geometry needed
+- `data.load` entries in settings.json use `"load": {}` for column mapping (not `"dtypes"`)
+
+### What still needs to happen before running the pipeline
+1. Run `generate_settings.py` to create a `settings.json`
+2. Copy/move `settings.json` into `notebooks/pipeline/data/{slug}/in/`
+3. Run `download_data.py` to fetch the parquet files (will also patch settings.json)
+4. Fill in `modeling_groups`, `field_classification.important.fields`, and `dep_vars`
+5. Open `notebooks/pipeline/01-assemble.ipynb` and run it
+
+---
