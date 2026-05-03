@@ -85,7 +85,7 @@ python scripts/generate_settings.py seeds/seed_us-pa-berks.json --dry-run
 
 **Branch:** `feature/data-downloader`
 **Date:** 2026-05-02
-**Status:** In progress (ready to merge)
+**Status:** Merged into master (PR #2)
 
 ### Goal
 Build a data downloader that fetches actual parquet/geoparquet files from
