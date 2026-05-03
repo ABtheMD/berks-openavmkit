@@ -6,7 +6,11 @@ build/
 tests/catboost_info/
 tests/out/
 tests/data/
-notebooks/pipeline/data/
+notebooks/pipeline/data/**/out/
+notebooks/pipeline/data/**/*.parquet
+notebooks/pipeline/data/**/*.geoparquet
+notebooks/pipeline/data/**/*.gpkg
+notebooks/pipeline/data/**/*.csv
 notebooks/pipeline/out/
 notebooks/pipeline/cache/
 notebooks/cache/
