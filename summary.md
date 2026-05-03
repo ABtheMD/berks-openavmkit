@@ -30,7 +30,7 @@ Stored in `C:\Users\Andre\.gitconfig`.
 
 **Branch:** `feature/settings-generator`
 **Date:** 2026-05-02
-**Status:** In progress
+**Status:** Merged into master (PR #1)
 
 ### Goal
 Build a general-purpose Python script that generates a `settings.json` file for
@@ -85,7 +85,7 @@ python scripts/generate_settings.py seeds/seed_us-pa-berks.json --dry-run
 
 **Branch:** `feature/data-downloader`
 **Date:** 2026-05-02
-**Status:** In progress
+**Status:** In progress (ready to merge)
 
 ### Goal
 Build a data downloader that fetches actual parquet/geoparquet files from
@@ -97,8 +97,10 @@ location for the openavmkit pipeline to consume.
 |---|---|
 | `scripts/download_data.py` | New — the downloader script |
 | `scripts/generate_settings.py` | Fix — `"dtypes": {}` → `"load": {}`, add `"geometry": true` for geo_parcels |
+| `notebooks/pipeline/data/us-pa-berks/in/settings.json` | New — completed Berks County settings file |
+| `.gitignore` | Updated — ignore `*.parquet` / `out/` per-file instead of whole data dir; settings.json now tracked |
 
-### How the script works
+### How the downloader works
 1. Reads a seed file — same format used by `generate_settings.py`
 2. For each `feature_server` source, paginates through all records via ArcGIS `/query` endpoint
 3. **geo_parcels role**: fetches as GeoJSON (`f=geojson&outSR=4326`), saves as GeoParquet via geopandas
@@ -124,17 +126,75 @@ python scripts/download_data.py seeds/seed_us-pa-berks.json --out-dir path/to/in
 python scripts/download_data.py seeds/seed_us-pa-berks.json --page-size 2000
 ```
 
+### Live test results — Berks County
+| File | Size | Records | Notes |
+|---|---|---|---|
+| `geo_parcels.parquet` | 37 MB | — | GeoParquet, EPSG:4326, 35 columns |
+| `cama_residential.parquet` | 18 MB | 169,484 | 196 columns |
+| `cama_commercial.parquet` | 15 MB | 169,484 | 232 columns |
+| `cama_master.parquet` | 12 MB | — | 49 columns |
+
+### Berks County settings.json — what was filled in manually (Step 3)
+After downloading, the following gaps were completed by hand for Berks:
+- `modeler`: Berks County / BerksCo, `valuation_date`: 2025-01-01
+- `modeling_groups`: res, com, ag, farm, ind, exempt, util (based on PA `class` field: R/C/A/F/I/E/UT)
+- `dep_vars`: `sfla`, `yrblt`, `bedrooms`, `fullbaths`, `halfbaths`, `stories`, `acreage`, `finbsmtarea`, `location`, `phycond`
+- `field_classification.important.fields`:
+  - `impr_category` → `luc` (PA land use code: 101=SF residential, 102=duplex, etc.)
+  - `land_category` → `class` (PA property class: R/C/A/F/I/E)
+  - `loc_neighborhood` → `location` (CAMA 1–9 location quality code)
+  - `loc_market_area` → `municipalname` (one of 73 Berks municipalities)
+  - `loc_region` → `school` (school district)
+- `important.locations`: `municipalname`, `muni`, `school`, `tax_dist_name`, `location`
+
 ### Pipeline input requirements (discovered during design)
 - Files must live at `notebooks/pipeline/data/{slug}/in/`
 - `geo_parcels` is **required** by the pipeline and must have a `geometry` column
 - Non-geo sources (CAMA tables) are plain parquet, no geometry needed
 - `data.load` entries in settings.json use `"load": {}` for column mapping (not `"dtypes"`)
 
-### What still needs to happen before running the pipeline
-1. Run `generate_settings.py` to create a `settings.json`
-2. Copy/move `settings.json` into `notebooks/pipeline/data/{slug}/in/`
-3. Run `download_data.py` to fetch the parquet files (will also patch settings.json)
-4. Fill in `modeling_groups`, `field_classification.important.fields`, and `dep_vars`
-5. Open `notebooks/pipeline/01-assemble.ipynb` and run it
+---
+
+## Roadmap / Future Work
+
+The three-step pipeline to get from a seed file to a runnable openavmkit model:
+
+| Step | Script | Status |
+|---|---|---|
+| **1 — Generate settings scaffold** | `scripts/generate_settings.py` | ✅ Done |
+| **2 — Download data** | `scripts/download_data.py` | ✅ Done |
+| **3 — Fill settings gaps** | *(no script yet — see note below)* | 🔲 Future |
+| **4 — Run pipeline** | `notebooks/pipeline/01-assemble.ipynb` | 🔲 Next |
+
+### Step 3: Settings configuration harness *(future work)*
+
+After Steps 1 and 2, the `settings.json` still has jurisdiction-specific gaps that
+cannot be filled by a simple generic script:
+
+- `modeling.metadata.modeler`, `modeler_nick`, `valuation_date`
+- `modeling.modeling_groups` — property type groupings driven by the jurisdiction's
+  own classification system (PA uses `class` codes R/C/A/F/I; other states differ entirely)
+- `field_classification.important.fields` — mapping of openavmkit's standard role names
+  (`impr_category`, `land_category`, `loc_neighborhood`, etc.) to the actual column names
+  in the downloaded data, which vary by jurisdiction
+- `models.default.dep_vars` — meaningful predictors depend on which fields are actually
+  populated and relevant for that jurisdiction
+
+**Why a simple script can't do this:**
+Every jurisdiction structures its CAMA data differently. Berks County uses `class` for
+property type and `luc` for building subtype; another county might use a single numeric
+code, or a completely different taxonomy. The field that means "neighborhood" in one
+county might not exist at all in another.
+
+**Proposed future approach — a configuration harness:**
+Build an interactive or semi-automated Step 3 that:
+1. Inspects the downloaded parquet files (unique values, null rates, cardinality)
+2. Presents candidate fields for each gap with sample values
+3. Lets the user confirm or override each mapping
+4. Writes the completed `settings.json`
+
+This harness would live at `scripts/configure_settings.py` and sit between the
+downloader and the pipeline run. It is the highest-value next script to build after
+the pipeline has been validated end-to-end for at least one jurisdiction.
 
 ---
