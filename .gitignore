@@ -36,3 +36,6 @@ tests/cache/
 cache/
 
 out/
+
+# Claude Code internal metadata
+.claude/
