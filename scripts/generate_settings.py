@@ -330,17 +330,22 @@ def build_settings(
     sources  = seed["sources"]
 
     # One load entry per source handle
-    data_load = {
-        source["handle"]: {
+    geo_handles = {s["handle"] for s in sources if s.get("role") == "geo_parcels"}
+
+    data_load = {}
+    for source in sources:
+        handle = source["handle"]
+        entry: dict = {
             "__note": (
-                f"File produced by the data-download step for source '{source['handle']}'. "
+                f"File produced by the data-download step for source '{handle}'. "
                 "Adjust the filename if your download pipeline uses a different name."
             ),
-            "filename": f"{source['handle']}.parquet",
-            "dtypes": {},
+            "filename": f"{handle}.parquet",
+            "load": {},
         }
-        for source in sources
-    }
+        if handle in geo_handles:
+            entry["geometry"] = True
+        data_load[handle] = entry
 
     # Suggest up to MAX_DEP_VARS numeric land+impr fields as default dep_vars
     dep_vars = dep_var_candidates[:MAX_DEP_VARS]
