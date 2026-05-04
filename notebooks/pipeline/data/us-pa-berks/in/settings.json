@@ -17,23 +17,426 @@
       "geo_parcels": {
         "__note": "File produced by the data-download step for source 'geo_parcels'. Adjust the filename if your download pipeline uses a different name.",
         "filename": "geo_parcels.parquet",
-        "load": {},
-        "geometry": true
+        "load": {
+          "key": "propid",
+          "name1": "name1",
+          "fullsiteaddress": "fullsiteaddress",
+          "muni": "muni",
+          "acreage": "acreage",
+          "deedamount": "deedamount",
+          "planbkpg": "planbkpg",
+          "lot": "lot",
+          "tax_dist": "tax_dist",
+          "descr1": "descr1",
+          "descr2": "descr2",
+          "descr3": "descr3",
+          "descr4": "descr4",
+          "clngreen": "clngreen",
+          "school": "school",
+          "class": "class",
+          "deedsx1": "deedsx1",
+          "deedsx2": "deedsx2",
+          "valuland": "valuland",
+          "valubldg": "valubldg",
+          "valutotal": "valutotal",
+          "landuse": "landuse",
+          "homestead": "homestead",
+          "municipalname": "municipalname",
+          "tax_dist_name": "tax_dist_name",
+          "shape__area": "shape__area",
+          "shape__length": "shape__length"
+        },
+        "geometry": true,
+        "dupes": {
+          "subset": [
+            "key"
+          ],
+          "sort_by": [
+            "key",
+            "asc"
+          ],
+          "drop": true
+        }
       },
       "cama_master": {
         "__note": "File produced by the data-download step for source 'cama_master'. Adjust the filename if your download pipeline uses a different name.",
         "filename": "cama_master.parquet",
-        "load": {}
+        "load": {
+          "key": "parid",
+          "sale_price": "price",
+          "sale_date": "saledt",
+          "livunit": "livunit"
+        },
+        "calc": {
+          "key_sale": [
+            "+",
+            [
+              "asstr",
+              "key"
+            ],
+            [
+              "+",
+              "str:_",
+              [
+                "asstr",
+                "sale_date"
+              ]
+            ]
+          ],
+          "valid_sale": [
+            "?",
+            [
+              "and",
+              [
+                ">",
+                "sale_price",
+                0
+              ],
+              [
+                "<",
+                "sale_price",
+                50000000
+              ]
+            ]
+          ],
+          "vacant_sale": [
+            "?",
+            [
+              "<",
+              "sale_price",
+              0
+            ]
+          ]
+        }
       },
       "cama_residential": {
         "__note": "File produced by the data-download step for source 'cama_residential'. Adjust the filename if your download pipeline uses a different name.",
         "filename": "cama_residential.parquet",
-        "load": {}
+        "load": {
+          "key": "parid",
+          "stories": "stories",
+          "extwall": "extwall",
+          "style": "style",
+          "bsmt": "bsmt",
+          "heating": "heating",
+          "fuel": "fuel",
+          "system": "system",
+          "totrooms": "totrooms",
+          "bedrooms": "bedrooms",
+          "famrooms": "famrooms",
+          "fullbaths": "fullbaths",
+          "halfbaths": "halfbaths",
+          "fixaddl": "fixaddl",
+          "fixtot": "fixtot",
+          "attic": "attic",
+          "phycond": "phycond",
+          "sfla": "sfla",
+          "recrmw": "recrmw",
+          "recrml": "recrml",
+          "recrmarea": "recrmarea",
+          "finbsmtw": "finbsmtw",
+          "finbsmtl": "finbsmtl",
+          "finbsmtarea": "finbsmtarea",
+          "wbfp_openings": "wbfp_openings",
+          "wbfp_stacks": "wbfp_stacks",
+          "met_firepl": "met_firepl",
+          "met_firepl_st": "met_firepl_st",
+          "base_garage": "base_garage",
+          "lower1": "lower1",
+          "first1": "first1",
+          "second1": "second1",
+          "third1": "third1",
+          "lower2": "lower2",
+          "first2": "first2",
+          "second2": "second2",
+          "third2": "third2",
+          "lower3": "lower3",
+          "first3": "first3",
+          "second3": "second3",
+          "third3": "third3",
+          "lower4": "lower4",
+          "first4": "first4",
+          "second4": "second4",
+          "third4": "third4",
+          "lower5": "lower5",
+          "first5": "first5",
+          "second5": "second5",
+          "third5": "third5",
+          "lower6": "lower6",
+          "first6": "first6",
+          "second6": "second6",
+          "third6": "third6",
+          "lower7": "lower7",
+          "first7": "first7",
+          "second7": "second7",
+          "third7": "third7",
+          "lower8": "lower8",
+          "first8": "first8",
+          "second8": "second8",
+          "third8": "third8",
+          "code7": "code7",
+          "units7": "units7",
+          "yrblt7": "yrblt7",
+          "measw7": "measw7",
+          "by7": "by7",
+          "measl7": "measl7",
+          "code8": "code8",
+          "units8": "units8",
+          "yrblt8": "yrblt8",
+          "measw8": "measw8",
+          "by8": "by8",
+          "measl8": "measl8"
+        }
       },
       "cama_commercial": {
         "__note": "File produced by the data-download step for source 'cama_commercial'. Adjust the filename if your download pipeline uses a different name.",
         "filename": "cama_commercial.parquet",
-        "load": {}
+        "load": {
+          "key": "parid",
+          "jur": "jur",
+          "taxyr": "taxyr",
+          "cur": "cur",
+          "taxdist": "taxdist",
+          "schdist": "schdist",
+          "own1": "own1",
+          "own2": "own2",
+          "mailing": "mailing",
+          "cityname": "cityname",
+          "statecode": "statecode",
+          "zip1": "zip1",
+          "zip2": "zip2",
+          "careof": "careof",
+          "lotnum": "lotnum",
+          "planbook": "planbook",
+          "planpage": "planpage",
+          "desc1": "desc1",
+          "desc2": "desc2",
+          "desc3": "desc3",
+          "desc4": "desc4",
+          "cgyr": "cgyr",
+          "acres": "acres",
+          "instruno": "instruno",
+          "book": "book",
+          "page": "page",
+          "adradd": "adradd",
+          "adrdir": "adrdir",
+          "adrstr": "adrstr",
+          "adrsuf": "adrsuf",
+          "addldeedbk1": "addldeedbk1",
+          "addldeedpg1": "addldeedpg1",
+          "addldeedbk2": "addldeedbk2",
+          "addldeedpg2": "addldeedpg2",
+          "addldeedbk3": "addldeedbk3",
+          "addldeedpg3": "addldeedpg3",
+          "mktland": "mktland",
+          "bldg_value": "bldg_value",
+          "total_value": "total_value",
+          "luc": "luc",
+          "livunits": "livunits",
+          "card": "card",
+          "totcards": "totcards",
+          "type1": "type1",
+          "acres1": "acres1",
+          "type2": "type2",
+          "acres2": "acres2",
+          "type3": "type3",
+          "acres3": "acres3",
+          "type4": "type4",
+          "acres4": "acres4",
+          "type5": "type5",
+          "acres5": "acres5",
+          "type6": "type6",
+          "acres6": "acres6",
+          "type7": "type7",
+          "acres7": "acres7",
+          "type8": "type8",
+          "acres8": "acres8",
+          "totacres": "totacres",
+          "topo1": "topo1",
+          "topo2": "topo2",
+          "util1": "util1",
+          "util2": "util2",
+          "util3": "util3",
+          "str1": "str1",
+          "str2": "str2",
+          "front": "front",
+          "location": "location",
+          "yrblt": "yrblt",
+          "bldnum": "bldnum",
+          "idunits": "idunits",
+          "structure": "structure",
+          "struct1": "struct1",
+          "struct2": "struct2",
+          "struct3": "struct3",
+          "struct4": "struct4",
+          "struct5": "struct5",
+          "struct6": "struct6",
+          "struct7": "struct7",
+          "struct8": "struct8",
+          "aptunits1": "aptunits1",
+          "aptnobed1": "aptnobed1",
+          "aptnobth1": "aptnobth1",
+          "aptunits2": "aptunits2",
+          "aptnobed2": "aptnobed2",
+          "aptnobth2": "aptnobth2",
+          "aptunits3": "aptunits3",
+          "aptnobed3": "aptnobed3",
+          "aptnobth3": "aptnobth3",
+          "aptunits4": "aptunits4",
+          "aptnobed4": "aptnobed4",
+          "aptnobth4": "aptnobth4",
+          "aptunits5": "aptunits5",
+          "aptnobed5": "aptnobed5",
+          "aptnobth5": "aptnobth5",
+          "aptunits6": "aptunits6",
+          "aptnobed6": "aptnobed6",
+          "aptnobth6": "aptnobth6",
+          "aptunits7": "aptunits7",
+          "aptnobed7": "aptnobed7",
+          "aptnobth7": "aptnobth7",
+          "aptunits8": "aptunits8",
+          "aptnobed8": "aptnobed8",
+          "aptnobth8": "aptnobth8",
+          "sect1": "sect1",
+          "flrfrom1": "flrfrom1",
+          "flrto1": "flrto1",
+          "length1": "length1",
+          "width1": "width1",
+          "area1": "area1",
+          "usetype1": "usetype1",
+          "wallhgt1": "wallhgt1",
+          "extwall1": "extwall1",
+          "sect2": "sect2",
+          "flrfrom2": "flrfrom2",
+          "flrto2": "flrto2",
+          "length2": "length2",
+          "width2": "width2",
+          "area2": "area2",
+          "usetype2": "usetype2",
+          "wallhgt2": "wallhgt2",
+          "extwall2": "extwall2",
+          "sect3": "sect3",
+          "flrfrom3": "flrfrom3",
+          "flrto3": "flrto3",
+          "length3": "length3",
+          "width3": "width3",
+          "area3": "area3",
+          "usetype3": "usetype3",
+          "wallhgt3": "wallhgt3",
+          "extwall3": "extwall3",
+          "sect4": "sect4",
+          "flrfrom4": "flrfrom4",
+          "flrto4": "flrto4",
+          "length4": "length4",
+          "width4": "width4",
+          "area4": "area4",
+          "usetype4": "usetype4",
+          "wallhgt4": "wallhgt4",
+          "extwall4": "extwall4",
+          "sect5": "sect5",
+          "flrfrom5": "flrfrom5",
+          "flrto5": "flrto5",
+          "length5": "length5",
+          "width5": "width5",
+          "area5": "area5",
+          "usetype5": "usetype5",
+          "wallhgt5": "wallhgt5",
+          "extwall5": "extwall5",
+          "sect6": "sect6",
+          "flrfrom6": "flrfrom6",
+          "flrto6": "flrto6",
+          "length6": "length6",
+          "width6": "width6",
+          "area6": "area6",
+          "usetype6": "usetype6",
+          "wallhgt6": "wallhgt6",
+          "extwall6": "extwall6",
+          "sect7": "sect7",
+          "flrfrom7": "flrfrom7",
+          "flrto7": "flrto7",
+          "length7": "length7",
+          "width7": "width7",
+          "area7": "area7",
+          "usetype7": "usetype7",
+          "wallhgt7": "wallhgt7",
+          "extwall7": "extwall7",
+          "sect8": "sect8",
+          "flrfrom8": "flrfrom8",
+          "flrto8": "flrto8",
+          "length8": "length8",
+          "width8": "width8",
+          "area8": "area8",
+          "usetype8": "usetype8",
+          "wallhgt8": "wallhgt8",
+          "extwall8": "extwall8",
+          "code1": "code1",
+          "units1": "units1",
+          "measw1": "measw1",
+          "by1": "by1",
+          "measl1": "measl1",
+          "yrblt1": "yrblt1",
+          "code2": "code2",
+          "units2": "units2",
+          "measw2": "measw2",
+          "by2": "by2",
+          "measl2": "measl2",
+          "yrblt2": "yrblt2",
+          "code3": "code3",
+          "units3": "units3",
+          "measw3": "measw3",
+          "by3": "by3",
+          "measl3": "measl3",
+          "yrblt3": "yrblt3",
+          "code4": "code4",
+          "units4": "units4",
+          "measw4": "measw4",
+          "by4": "by4",
+          "measl4": "measl4",
+          "yrblt4": "yrblt4",
+          "code5": "code5",
+          "units5": "units5",
+          "measw5": "measw5",
+          "by5": "by5",
+          "measl5": "measl5",
+          "yrblt5": "yrblt5",
+          "code6": "code6",
+          "units6": "units6",
+          "measw6": "measw6",
+          "by6": "by6",
+          "measl6": "measl6",
+          "yrblt6": "yrblt6",
+          "parkcover": "parkcover",
+          "parkuncov": "parkuncov"
+        }
+      }
+    },
+    "process": {
+      "merge": {
+        "universe": [
+          "geo_parcels",
+          {
+            "id": "cama_master",
+            "how": "left",
+            "on": "key"
+          },
+          {
+            "id": "cama_residential",
+            "how": "left",
+            "on": "key"
+          },
+          {
+            "id": "cama_commercial",
+            "how": "left",
+            "on": "key"
+          }
+        ],
+        "sales": [
+          {
+            "id": "cama_master",
+            "how": "left",
+            "on": "key_sale"
+          }
+        ]
       }
     }
   },
@@ -80,27 +483,62 @@
         }
       }
     },
-    "modeling_groups": {
+    "model_groups": {
       "res": {
-        "name": "Residential"
+        "name": "Residential",
+        "filter": [
+          "==",
+          "class",
+          "str:R"
+        ]
       },
       "com": {
-        "name": "Commercial"
+        "name": "Commercial",
+        "filter": [
+          "==",
+          "class",
+          "str:C"
+        ]
       },
       "ag": {
-        "name": "Agricultural"
+        "name": "Agricultural",
+        "filter": [
+          "==",
+          "class",
+          "str:A"
+        ]
       },
       "farm": {
-        "name": "Farmland / Forest"
+        "name": "Farmland / Forest",
+        "filter": [
+          "==",
+          "class",
+          "str:F"
+        ]
       },
       "ind": {
-        "name": "Industrial"
+        "name": "Industrial",
+        "filter": [
+          "==",
+          "class",
+          "str:I"
+        ]
       },
       "exempt": {
-        "name": "Tax Exempt"
+        "name": "Tax Exempt",
+        "filter": [
+          "==",
+          "class",
+          "str:E"
+        ]
       },
       "util": {
-        "name": "Utility"
+        "name": "Utility",
+        "filter": [
+          "==",
+          "class",
+          "str:UT"
+        ]
       }
     }
   },
@@ -470,7 +908,7 @@
     },
     "important": {
       "fields": {
-        "__impr_category": "luc = PA land use code (101=SF residential, 102=duplex, etc.) — most granular building type available",
+        "__impr_category": "luc = PA land use code (101=SF residential, 102=duplex, etc.) \u00e2\u20ac\u201d most granular building type available",
         "impr_category": "luc",
         "__land_category": "class = PA property class (R=Residential, C=Commercial, A=Agricultural, F=Farmland, I=Industrial)",
         "land_category": "class",

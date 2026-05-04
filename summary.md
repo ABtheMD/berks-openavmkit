@@ -155,46 +155,113 @@ After downloading, the following gaps were completed by hand for Berks:
 
 ---
 
+## feature/configure-settings
+
+**Branch:** `feature/configure-settings`
+**Date:** 2026-05-03
+**Status:** Complete — pipeline validated end-to-end for Berks County
+
+### Goal
+Build `scripts/configure_settings.py` to fill in the `data.load` and `data.process.merge`
+sections that `generate_settings.py` leaves blank, and validate the full `01-assemble.ipynb`
+pipeline on real Berks County data.
+
+### Files changed
+| File | Change |
+|---|---|
+| `scripts/configure_settings.py` | New — fills data.load mappings, calc ops, data.process.merge |
+| `scripts/download_data.py` | Fix — convert ArcGIS Date fields (Unix ms) to datetime64 at download time |
+| `scripts/generate_settings.py` | Fix — emit `model_groups` (correct key) not `modeling_groups` |
+| `notebooks/pipeline/data/us-pa-berks/in/settings.json` | Updated — load mappings, merge, model_groups with filters |
+| `notebooks/pipeline/data/us-pa-berks/in/*.parquet` | Patched — date columns converted from float ms to datetime64 |
+
+### configure_settings.py — what it generates
+Run: `python scripts/configure_settings.py seeds/seed_us-pa-berks.json`
+
+1. **`data.load.<source>.load`** — maps raw column names to canonical names for every source:
+   - parcel id → `key`
+   - sale price → `sale_price`, sale date → `sale_date` (sales source only)
+   - every `field_classification` field found in that parquet → itself
+2. **`data.load.<source>.calc`** — on the sales source: `key_sale`, `valid_sale`, `vacant_sale`
+3. **`data.load.geo_parcels.dupes`** — explicit dedup on `key` (prevents auto-pick of wrong column)
+4. **`data.process.merge`** — universe (geo_parcels base + left-join each other source) and sales
+
+One-time parquet patch: `python scripts/configure_settings.py seeds/... --patch-dates`
+Converts float64 Unix-ms date columns to datetime64 in existing parquets.
+
+### Bugs discovered and fixed during pipeline validation
+
+| Error | Root cause | Fix (no library changes) |
+|---|---|---|
+| `IndexError: list index out of range` in `get_dupes` | Empty `"load": {}` → only geometry loaded; auto-dedup found no columns | `configure_settings.py` now fills all `data.load` mappings |
+| `ValueError: No "universe" merge instructions` | `data.process.merge` section entirely absent | `configure_settings.py` now generates `data.process.merge` |
+| `ValueError: Unknown operation: >` | Calc format used `>` directly; that's a filter operator, needs `["?", ...]` wrapper in calc context | Fixed in `build_sales_calcs()`: `"valid_sale": ["?", ["and", [">", ...], ...]]` |
+| geo_parcels deduped on wrong column (`planbkpg` → 12k rows instead of 156k) | `get_dupes` auto mode picks first non-geometry column, which wasn't `key` | `configure_settings.py` adds explicit `"dupes": {"subset": ["key"], ...}` to geo_parcels entry |
+| `ValueError: Date field 'sale_date' does not have a time format` | ArcGIS Date fields stored as float64 Unix ms; pipeline `enrich_time` needs datetime64 | `download_data.py` now converts ArcGIS Date fields at download time; `--patch-dates` flag patches existing parquets |
+| `ValueError: You must define at least one model group` | Settings used key `modeling_groups`; pipeline reads `model_groups` | Fixed `generate_settings.py` to emit `model_groups`; manually set in Berks settings.json |
+| `ValueError: Could not find field named "R"` | Filter string literals not prefixed with `str:` | Changed filters to `["==", "class", "str:R"]` etc. |
+
+### openavmkit filter/calc syntax (key discoveries)
+- **Calc operators**: `+`, `asstr`, `and`, `?`, `datetime`, `datetimestr`, etc. (in `calculations.py`)
+- **Filter operators**: `==`, `>`, `<`, `>=`, `<=`, `isin`, `and`, `or`, etc. (in `filters.py`)
+- **Bridge**: `["?", <filter_expr>]` in a calc context invokes `resolve_filter` → returns boolean Series
+- **String literals in filters**: must use `str:` prefix — e.g. `["==", "class", "str:R"]`
+- **`data.load.<source>.load`** semantics: empty `{}` → only geometry loaded (all other columns silently dropped)
+
+### Berks County 01-assemble.ipynb results
+| Model group | Parcels | Sales |
+|---|---|---|
+| Residential (R) | 133,913 | 102,558 |
+| Commercial (C) | 8,209 | 6,410 |
+| Farmland / Forest (F) | 7,768 | 4,694 |
+| Tax Exempt (E) | 4,571 | 1,519 |
+| Industrial (I) | 986 | 683 |
+| Agricultural (A) | 254 | 190 |
+| Utility (UT) | 210 | 67 |
+| UNKNOWN (no class) | 519 | — |
+| **Total** | **156,430** | **120,121** |
+
+Output files written to `notebooks/pipeline/data/us-pa-berks/out/`:
+- `1-assemble-sup.pickle`
+- `look/1-assemble-universe.parquet` (156,430 × 343 columns)
+- `look/1-assemble-sales.parquet`
+- `look/1-assemble-sales-hydrated.parquet`
+
+---
+
 ## Roadmap / Future Work
 
-The three-step pipeline to get from a seed file to a runnable openavmkit model:
+The pipeline to get from a seed file to a runnable openavmkit model:
 
 | Step | Script | Status |
 |---|---|---|
 | **1 — Generate settings scaffold** | `scripts/generate_settings.py` | ✅ Done |
 | **2 — Download data** | `scripts/download_data.py` | ✅ Done |
-| **3 — Fill settings gaps** | *(no script yet — see note below)* | 🔲 Future |
-| **4 — Run pipeline** | `notebooks/pipeline/01-assemble.ipynb` | 🔲 Next |
+| **3 — Fill settings gaps** | `scripts/configure_settings.py` | ✅ Done |
+| **3b — Fill model_groups + important.fields** | Manual (jurisdiction-specific) | ✅ Done for Berks |
+| **4a — Run 01-assemble.ipynb** | `notebooks/pipeline/01-assemble.ipynb` | ✅ Done |
+| **4b — Run 02-clean.ipynb** | `notebooks/pipeline/02-clean.ipynb` | 🔲 Next |
+| **4c — Run 03-model.ipynb** | `notebooks/pipeline/03-model.ipynb` | 🔲 Future |
 
-### Step 3: Settings configuration harness *(future work)*
+### Step 3b: model_groups (manual, jurisdiction-specific)
 
-After Steps 1 and 2, the `settings.json` still has jurisdiction-specific gaps that
-cannot be filled by a simple generic script:
+After `configure_settings.py`, set `modeling.model_groups` manually in `settings.json`:
 
-- `modeling.metadata.modeler`, `modeler_nick`, `valuation_date`
-- `modeling.modeling_groups` — property type groupings driven by the jurisdiction's
-  own classification system (PA uses `class` codes R/C/A/F/I; other states differ entirely)
-- `field_classification.important.fields` — mapping of openavmkit's standard role names
-  (`impr_category`, `land_category`, `loc_neighborhood`, etc.) to the actual column names
-  in the downloaded data, which vary by jurisdiction
-- `models.default.dep_vars` — meaningful predictors depend on which fields are actually
-  populated and relevant for that jurisdiction
+```json
+"model_groups": {
+  "res": { "name": "Residential", "filter": ["==", "class", "str:R"] },
+  "com": { "name": "Commercial",  "filter": ["==", "class", "str:C"] }
+}
+```
 
-**Why a simple script can't do this:**
-Every jurisdiction structures its CAMA data differently. Berks County uses `class` for
-property type and `luc` for building subtype; another county might use a single numeric
-code, or a completely different taxonomy. The field that means "neighborhood" in one
-county might not exist at all in another.
+Key rules:
+- The correct settings key is `model_groups` (NOT `modeling_groups`)
+- String literals in filters require `str:` prefix
+- Filter order matters — first matching group wins
 
-**Proposed future approach — a configuration harness:**
-Build an interactive or semi-automated Step 3 that:
-1. Inspects the downloaded parquet files (unique values, null rates, cardinality)
-2. Presents candidate fields for each gap with sample values
-3. Lets the user confirm or override each mapping
-4. Writes the completed `settings.json`
+### Step 3b: field_classification.important.fields (manual)
 
-This harness would live at `scripts/configure_settings.py` and sit between the
-downloader and the pipeline run. It is the highest-value next script to build after
-the pipeline has been validated end-to-end for at least one jurisdiction.
+Maps openavmkit's standard role names to actual local column names. Already completed for Berks
+(see the `field_classification.important.fields` section in settings.json).
 
 ---
