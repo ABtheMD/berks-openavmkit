@@ -107,6 +107,16 @@
               0
             ]
           ]
+        },
+        "dupes": {
+          "subset": [
+            "key_sale"
+          ],
+          "sort_by": [
+            "key_sale",
+            "asc"
+          ],
+          "drop": true
         }
       },
       "cama_residential": {

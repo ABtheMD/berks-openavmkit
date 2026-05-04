@@ -384,6 +384,8 @@ def main():
         entry["load"] = load_map
         if source.get("role") == GEO_ROLE:
             entry["dupes"] = {"subset": ["key"], "sort_by": ["key", "asc"], "drop": True}
+        elif is_sales:
+            entry["dupes"] = {"subset": ["key_sale"], "sort_by": ["key_sale", "asc"], "drop": True}
         settings["data"]["load"][handle] = entry
 
         print(f"  {handle}: {len(load_map)} fields mapped  (key={parcel_id_col})")
