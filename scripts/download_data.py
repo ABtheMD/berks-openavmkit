@@ -63,27 +63,46 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 # ArcGIS helpers
 # ---------------------------------------------------------------------------
 
-def get_layer_geometry_type(url: str) -> str | None:
+def get_layer_metadata(url: str) -> dict:
     """
-    Query ArcGIS layer metadata to determine whether the layer carries geometry.
-
-    Returns the geometryType string (e.g. 'esriGeometryPolygon',
-    'esriGeometryPoint', 'esriGeometryMultipoint') if the layer has geometry,
-    or None if it is purely tabular.
-
-    This is more reliable than inferring geometry from the source role because
-    some layers with non-standard roles (e.g. 'flat') still carry geometry
-    — Philadelphia's OPA dataset is a real example (point geometry on a flat file).
+    Fetch ArcGIS layer metadata JSON.  Returns {} on failure.
     """
     meta_url = url.rstrip("/") + "?f=json"
     try:
         resp = requests.get(meta_url, timeout=30)
         resp.raise_for_status()
-        geometry_type = resp.json().get("geometryType")
-        return geometry_type if geometry_type else None
+        return resp.json()
     except Exception as exc:
         print(f"    [!] Could not fetch layer metadata: {exc}", file=sys.stderr)
-        return None
+        return {}
+
+
+def get_date_field_names(url: str) -> set[str]:
+    """
+    Return the lowercased names of all esriFieldTypeDate fields in the layer.
+    ArcGIS returns Date fields as Unix millisecond timestamps (float/integer).
+    """
+    meta = get_layer_metadata(url)
+    date_fields = set()
+    for field in meta.get("fields", []):
+        if field.get("type") == "esriFieldTypeDate":
+            date_fields.add(field["name"].lower())
+    return date_fields
+
+
+def convert_date_columns(df: "pd.DataFrame", date_cols: set[str]) -> "pd.DataFrame":
+    """
+    Convert ArcGIS Unix-millisecond timestamp columns to datetime64[ns].
+
+    ArcGIS stores Date fields as integer/float milliseconds since the Unix
+    epoch.  Saving these as-is produces float64 parquet columns that the
+    openavmkit pipeline cannot parse without special unit handling.
+    Converting here means downstream consumers see proper datetime64 columns.
+    """
+    for col in date_cols:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], unit="ms", errors="coerce")
+    return df
 
 
 def get_record_count(url: str) -> int:
@@ -367,18 +386,25 @@ Examples:
             )
             continue
 
-        # Auto-detect geometry from ArcGIS layer metadata
-        geometry_type = get_layer_geometry_type(url)
+        # Auto-detect geometry and date fields from ArcGIS layer metadata
+        meta = get_layer_metadata(url)
+        geometry_type = meta.get("geometryType") or None
         is_geo = geometry_type is not None
         if is_geo:
             print(f"    Geometry      : {geometry_type}", file=sys.stderr)
             geo_handles.add(handle)
+
+        date_cols = {f["name"].lower() for f in meta.get("fields", [])
+                     if f.get("type") == "esriFieldTypeDate"}
+        if date_cols:
+            print(f"    Date fields   : {', '.join(sorted(date_cols))}", file=sys.stderr)
 
         out_file = out_dir / f"{handle}.parquet"
 
         try:
             if is_geo:
                 gdf = download_geo_source(url, handle, args.page_size)
+                gdf = convert_date_columns(gdf, date_cols)
                 gdf.to_parquet(out_file, index=False)
                 print(
                     f"    [✓] Saved GeoParquet → {out_file}\n"
@@ -387,6 +413,7 @@ Examples:
                 )
             else:
                 df = download_tabular_source(url, handle, args.page_size)
+                df = convert_date_columns(df, date_cols)
                 df.to_parquet(out_file, index=False)
                 print(
                     f"    [✓] Saved Parquet → {out_file}\n"
