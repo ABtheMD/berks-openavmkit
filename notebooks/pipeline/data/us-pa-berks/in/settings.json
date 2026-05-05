@@ -65,7 +65,8 @@
           "key": "parid",
           "sale_price": "price",
           "sale_date": "saledt",
-          "livunit": "livunit"
+          "livunit": "livunit",
+          "class": "class"
         },
         "calc": {
           "key_sale": [
@@ -102,9 +103,17 @@
           "vacant_sale": [
             "?",
             [
-              "<",
-              "sale_price",
-              0
+              "or",
+              [
+                "<",
+                "sale_price",
+                0
+              ],
+              [
+                "isin",
+                "class",
+                ["A", "C", "F", "I", "E", "UT"]
+              ]
             ]
           ]
         },
@@ -141,6 +150,9 @@
           "attic": "attic",
           "phycond": "phycond",
           "sfla": "sfla",
+          "bldg_area_finished_sqft": "sfla",
+          "yrblt": "yrblt",
+          "bldg_year_built": "yrblt",
           "recrmw": "recrmw",
           "recrml": "recrml",
           "recrmarea": "recrmarea",
@@ -272,6 +284,9 @@
           "front": "front",
           "location": "location",
           "yrblt": "yrblt",
+          "bldg_year_built": "yrblt",
+          "area1": "area1",
+          "bldg_area_finished_sqft": "area1",
           "bldnum": "bldnum",
           "idunits": "idunits",
           "structure": "structure",
@@ -445,8 +460,16 @@
             "id": "cama_master",
             "how": "left",
             "on": "key_sale"
+          },
+          {
+            "id": "cama_residential",
+            "how": "left",
+            "on": "key"
           }
         ]
+      },
+      "time_adjustment": {
+        "period": "Y"
       }
     }
   },
@@ -741,8 +764,6 @@
         "parkuncov"
       ],
       "categorical": [
-        "sale_year",
-        "sale_month",
         "type1",
         "type2",
         "type3",

@@ -229,6 +229,119 @@ Output files written to `notebooks/pipeline/data/us-pa-berks/out/`:
 
 ---
 
+## fix: NA handling for calc-output boolean columns
+
+**Date:** 2026-05-04
+**Status:** Fix applied to `openavmkit/data.py`; kept local (branch deleted, intentionally set to the side)
+
+### Background
+After validating 01-assemble.ipynb, two `UserWarning` messages appeared on every run:
+```
+UserWarning: No NA handling specified for boolean field 'valid_sale'. Defaulting to 'na_false'.
+UserWarning: No NA handling specified for boolean field 'vacant_sale'. Defaulting to 'na_false'.
+```
+
+### Root cause
+`load_dataframe` in `openavmkit/data.py` fires a `UserWarning` for any boolean column that lacks an entry in `extra_map`. Columns produced by calc operations (`valid_sale`, `vacant_sale`) can never get such an entry through the load dict — they have no raw source column in the parquet file. So the warning fired on every pipeline run even though the default behavior (`na_false`) was always correct.
+
+### Fix (`openavmkit/data.py`, inside `load_dataframe`)
+Inserted a loop between the calc/tweak execution block and the dtype-enforcement loop. For any column that (a) appears in a `calc` operation, (b) has a boolean dtype, and (c) has no existing `extra_map` entry, the loop seeds `extra_map[col] = "na_false"` before the dtype-enforcement loop runs.
+
+```python
+for operation in operation_order:
+    if operation["type"] == "calc":
+        for calc_col in operation["operations"]:
+            if calc_col in df.columns and pd.api.types.is_bool_dtype(df[calc_col]):
+                if calc_col not in extra_map:
+                    extra_map[calc_col] = "na_false"
+```
+
+**Key discovery:** calc output dtype is numpy `dtype('bool')`, not pandas `BooleanDtype`. Checking `== "boolean"` fails; `pd.api.types.is_bool_dtype()` is required to catch both.
+
+### openavmkit editable install (required for fork's data.py to take effect)
+The pipeline resolves `import openavmkit` from wherever pip installed it. To redirect it to the fork:
+```bash
+pip install -e . --no-deps   # run from berks-openavmkit root
+```
+`--no-deps` is needed because `requirements.txt` pins `pipreqs==0.5.0` which does not exist on PyPI (upstream uses `0.4.13`).
+
+### Verification
+- Cleared checkpoints at `out/checkpoints/`, re-ran 01-assemble on Berks County
+- Zero `UserWarning` messages in pipeline output
+- All output files and parcel/sales counts unchanged (156,430 parcels, 120,121 sales)
+
+---
+
+## fix: vacant_sale calc + class field in cama_master
+
+**Date:** 2026-05-05
+**Status:** Fix applied to `settings.json`; 02-clean validated end-to-end
+
+### Background
+After 01-assemble ran cleanly, 02-clean (`_run_clean.py`) was hitting a `TypeError: 'float' object cannot be interpreted as an integer` inside `_get_expected_periods`. Root cause traced to empty sales DataFrames for non-residential model groups.
+
+### Root cause chain
+1. `enrich_df_vacancy` sets `is_vacant = True` when `bldg_area_finished_sqft == 0`
+2. Non-residential properties (A, C, F, I, E, UT) have no residential CAMA data → `bldg_area_finished_sqft = 0` → `is_vacant = True`
+3. `_get_sales` (inside `_determine_value_driver`) sets `valid_sale = False` when `~vacant_sale & is_vacant` — so any property that is vacant but not flagged as a vacant sale gets invalidated
+4. All non-res sales had `vacant_sale = False` (old calc only checked `price < 0`) → all invalidated → empty `df_sales`
+5. Empty `df_sales` → `_determine_value_driver` returns "impr" → `_crunch_time_adjustment` gets empty `df_per` → `sale_date.min()` returns `NaT` → `.year` returns `nan` (float) → `range(nan, nan+1)` → `TypeError`
+
+### Fixes applied to `settings.json`
+
+**1. Added `class` field to `cama_master.load`:**
+```json
+"load": {
+  "key": "parid", "sale_price": "price", "sale_date": "saledt",
+  "livunit": "livunit",
+  "class": "class"
+}
+```
+
+**2. Expanded `vacant_sale` calc to mark non-residential PA classes as vacant sales:**
+```json
+"vacant_sale": ["?", ["or",
+  ["<", "sale_price", 0],
+  ["isin", "class", ["A", "C", "F", "I", "E", "UT"]]
+]]
+```
+
+### Key discovery: `isin` list items don't use `str:` prefix
+
+The `str:` prefix (needed for single-value `==` comparisons) is NOT used for `isin` list items. The filter engine checks `isinstance(value, str)` before stripping `str:` — for lists that branch is skipped, so items are passed as-is to `df[field].isin(value)`. Using `"str:A"` in an `isin` list never matches the actual column value `"A"`.
+
+| Filter context | Correct syntax |
+|---|---|
+| `["==", "class", "str:R"]` | single string → needs `str:` prefix |
+| `["isin", "class", ["A", "C", "F"]]` | list → NO `str:` prefix |
+
+### Berks County 02-clean.ipynb results
+
+| Model group | Parcels | Sales (pre-scrutiny) | After heuristics | Vacant | Improved |
+|---|---|---|---|---|---|
+| Residential (R) | 133,913 | 106,204 | 25,565 | 0 | 25,565 |
+| Commercial (C) | 8,209 | 6,529 | 1,533 | 1,533 | 0 |
+| Farmland / Forest (F) | 7,768 | 4,706 | 232 | 232 | 0 |
+| Tax Exempt (E) | 4,571 | 1,704 | 99 | 99 | 0 |
+| Industrial (I) | 986 | 708 | 109 | 109 | 0 |
+| Agricultural (A) | 254 | 197 | 20 | 20 | 0 |
+| Utility (UT) | 210 | 71 | — | — | — |
+| **Total (res ratio study)** | — | **49,026** | — | **5,686** | **43,340** |
+
+Time adjustment: calculated for all 7 model groups (period = Y). Heuristics dropped 18,031 invalid sales (17,307 duplicate date/price pairs, 1,471 false vacants).
+
+Output files written to `notebooks/pipeline/data/us-pa-berks/out/`:
+- `2-clean-sup.pickle`
+- `look/2-clean-universe.parquet`
+- `look/2-clean-sales.parquet`
+- `look/2-clean-sales-hydrated.parquet`
+
+Warnings (non-fatal, no action needed):
+- `land equity clusters but no analysis.land_equity.location` — location field not yet wired up for land equity
+- `no deed_id in analysis.sales_scrutiny.deed_id` — deed-based heuristic skipped (no deed field in Berks data)
+
+---
+
 ## Roadmap / Future Work
 
 The pipeline to get from a seed file to a runnable openavmkit model:
@@ -240,7 +353,7 @@ The pipeline to get from a seed file to a runnable openavmkit model:
 | **3 — Fill settings gaps** | `scripts/configure_settings.py` | ✅ Done |
 | **3b — Fill model_groups + important.fields** | Manual (jurisdiction-specific) | ✅ Done for Berks |
 | **4a — Run 01-assemble.ipynb** | `notebooks/pipeline/01-assemble.ipynb` | ✅ Done |
-| **4b — Run 02-clean.ipynb** | `notebooks/pipeline/02-clean.ipynb` | 🔲 Next |
+| **4b — Run 02-clean.ipynb** | `notebooks/pipeline/02-clean.ipynb` | ✅ Done |
 | **4c — Run 03-model.ipynb** | `notebooks/pipeline/03-model.ipynb` | 🔲 Future |
 
 ### Step 3b: model_groups (manual, jurisdiction-specific)
