@@ -1152,9 +1152,15 @@ def _get_sales(
         df.loc[~idx_vacant_sale & idx_is_vacant, "valid_sale"] = False
         
 
-    # Use sale_price_time_adj if it exists, otherwise use sale_price
-    sale_field = "sale_price_time_adj" if "sale_price_time_adj" in df.columns and len(df["sale_price_time_adj"].dropna()) > 0 else "sale_price"
-    idx_positive_sale_price = df[sale_field].gt(0)
+    # Use sale_price_time_adj if it exists, otherwise use sale_price.
+    # Fall back to sale_price on a per-row basis for model groups whose time
+    # adjustment produced no multipliers (e.g. a property class where building
+    # area is unavailable), so those rows are not silently excluded.
+    if "sale_price_time_adj" in df.columns and len(df["sale_price_time_adj"].dropna()) > 0:
+        price_for_filter = df["sale_price_time_adj"].fillna(df["sale_price"])
+    else:
+        price_for_filter = df["sale_price"]
+    idx_positive_sale_price = price_for_filter.gt(0)
     
     
     idx_valid_sale = df["valid_sale"].eq(True)
