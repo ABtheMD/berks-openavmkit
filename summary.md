@@ -342,6 +342,98 @@ Warnings (non-fatal, no action needed):
 
 ---
 
+## feature/run-03-model
+
+**Branch:** `feature/run-03-model`
+**Date:** 2026-05-05
+**Status:** Merged into master (PR #7)
+
+### Goal
+Run the full 03-model notebook (variable selection → model experiments → outlier
+identification → finalize models → ratio study) end-to-end on the Berks County
+cleaned data produced in `feature/run-02-clean`.
+
+### Files added / changed
+| File | Change |
+|---|---|
+| `notebooks/pipeline/_run_model.py` | New headless runner mirroring all 03-model notebook cells |
+| `notebooks/pipeline/data/us-pa-berks/in/settings.json` | Added `modeling.try_variables.variables` (29 candidates) and `modeling.instructions.{main,vacant,hedonic}.skip.util` |
+
+### Library fixes required (separate PRs merged first)
+
+#### PR #6 — `_get_sales` per-row sale_price fallback
+**Root cause:** `_get_sales` selected `sale_price_time_adj` as the price field for
+the _entire_ DataFrame if any row had a non-null value. Model groups whose time
+adjustment produced all-NaN multipliers (e.g. `com`, where `bldg_area_finished_sqft = 0`
+prevents a valid `sale_price_per_impr` calculation) had every sale silently
+excluded — `NaN.gt(0)` returns `False`.
+
+**Consequence chain:** COM has 1,533 sales but all `sale_price_time_adj = NaN` →
+`_get_sales` returns 0 COM sales → `write_canonical_splits` skips COM →
+`try_variables` raises `ValueError: No split keys found`.
+
+**Fix (`openavmkit/utilities/settings.py`):**
+```python
+# Before (binary global choice):
+sale_field = "sale_price_time_adj" if ... else "sale_price"
+idx_positive_sale_price = df[sale_field].gt(0)
+
+# After (per-row fallback):
+if "sale_price_time_adj" in df.columns and len(df["sale_price_time_adj"].dropna()) > 0:
+    price_for_filter = df["sale_price_time_adj"].fillna(df["sale_price"])
+else:
+    price_for_filter = df["sale_price"]
+idx_positive_sale_price = price_for_filter.gt(0)
+```
+
+### Settings additions
+
+#### `modeling.try_variables.variables` (29 candidates)
+Required by `try_variables` — was missing, causing `ValueError: No variables defined`.
+```
+sfla, yrblt, bedrooms, fullbaths, halfbaths, stories, acreage, finbsmtarea,
+location, phycond, totrooms, famrooms, wbfp_openings, base_garage, recrmarea,
+bldg_area_finished_sqft, bldg_year_built, bldg_age_years,
+land_area_sqft, land_area_sqft_log, land_area_gis_sqft,
+latitude_norm, longitude_norm, polar_angle, polar_radius,
+geom_aspect_ratio, geom_rectangularity_num, he_id, land_he_id
+```
+
+#### `modeling.instructions.{main,vacant,hedonic}.skip.util: ["all"]`
+`util` has 0 sales in the cleaned data. `finalize_models` still tried to run the
+`hedonic` pass for it, calling `_trim_hedonic_sales` → `_read_split_keys` →
+`ValueError: No split keys found`. Added an explicit skip so all three passes
+(main, vacant, hedonic) bypass `util` cleanly.
+
+### Berks County 03-model.ipynb results
+
+Pipeline ran to completion: **exit code 0**.
+
+| Model group | Split keys | Notes |
+|---|---|---|
+| `res` | ✅ | Primary group — variable selection produced meaningful R² scores |
+| `com` | ✅ | 1,533 sales; `sale_price_time_adj` all NaN → uses `sale_price` fallback |
+| `ag` | ✅ | Vacant-sale group (class A) |
+| `farm` | ✅ | Vacant-sale group (class F) |
+| `ind` | ✅ | Vacant-sale group (class I) — too few improved sales for model results |
+| `exempt` | ✅ | Vacant-sale group (class E) |
+| `util` | ❌ (skipped) | 0 sales in cleaned data |
+
+**Top variables for `res/main` (by `try_variables` R²):**
+
+| Variable | R² | Direction |
+|---|---|---|
+| `bldg_area_finished_sqft` | 0.416 | + |
+| `land_area_sqft_log` | 0.349 | + |
+| `bldg_age_years` | 0.254 | − |
+
+### Known limitations / warnings
+- **Spatial lag not configured:** All model groups emit `"Could not find model entry X in process.enrich.spatial_lag.model_groups"`. The `process.enrich.spatial_lag` section in settings is not yet populated for Berks; spatial lag features are absent from the model.
+- **Non-res model groups produce "No results generated":** `com`, `ag`, `farm`, `ind`, `exempt` run through the model pipeline but produce no ratio study output. Likely cause: too few qualified improved sales after `_get_sales` filtering and heuristics. These groups are all `vacant_sale = True` and are modeled as land/vacant — the current model configuration may not be tuned for that use case.
+- **COM time adjustment all NaN:** The time adjustment schedule for `com` has all-NaN correction factors. Root cause not yet fully diagnosed (likely: COM has `bldg_area_finished_sqft = 0` for all sales → `_determine_value_driver` returns "land" → `sale_price_per_land_sqft` used → but `_crunch_time_adjustment` produces no periods with ≥ 5 sales at the chosen resolution). COM sales are modeled using `sale_price` directly (via the PR #6 fallback).
+
+---
+
 ## Roadmap / Future Work
 
 The pipeline to get from a seed file to a runnable openavmkit model:
@@ -354,7 +446,7 @@ The pipeline to get from a seed file to a runnable openavmkit model:
 | **3b — Fill model_groups + important.fields** | Manual (jurisdiction-specific) | ✅ Done for Berks |
 | **4a — Run 01-assemble.ipynb** | `notebooks/pipeline/01-assemble.ipynb` | ✅ Done |
 | **4b — Run 02-clean.ipynb** | `notebooks/pipeline/02-clean.ipynb` | ✅ Done |
-| **4c — Run 03-model.ipynb** | `notebooks/pipeline/03-model.ipynb` | 🔲 Future |
+| **4c — Run 03-model.ipynb** | `notebooks/pipeline/03-model.ipynb` | ✅ Done |
 
 ### Step 3b: model_groups (manual, jurisdiction-specific)
 

@@ -495,7 +495,43 @@
         "period": "Q"
       },
       "ensemble": [],
-      "allocation": []
+      "allocation": [],
+      "main":    { "skip": { "util": ["all"] } },
+      "vacant":  { "skip": { "util": ["all"] } },
+      "hedonic": { "skip": { "util": ["all"] } }
+    },
+    "try_variables": {
+      "variables": [
+        "sfla",
+        "yrblt",
+        "bedrooms",
+        "fullbaths",
+        "halfbaths",
+        "stories",
+        "acreage",
+        "finbsmtarea",
+        "location",
+        "phycond",
+        "totrooms",
+        "famrooms",
+        "wbfp_openings",
+        "base_garage",
+        "recrmarea",
+        "bldg_area_finished_sqft",
+        "bldg_year_built",
+        "bldg_age_years",
+        "land_area_sqft",
+        "land_area_sqft_log",
+        "land_area_gis_sqft",
+        "latitude_norm",
+        "longitude_norm",
+        "polar_angle",
+        "polar_radius",
+        "geom_aspect_ratio",
+        "geom_rectangularity_num",
+        "he_id",
+        "land_he_id"
+      ]
     },
     "models": {
       "default": {
