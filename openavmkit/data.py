@@ -3734,6 +3734,20 @@ def load_dataframe(
         elif op_type == "tweak":
             df = perform_tweaks(df, operation["operations"], rename_map)
 
+    # For any boolean column produced by a calc operation that lacks an explicit
+    # NA-handling entry in extra_map, default silently to "na_false".  Without
+    # this, _boolify_column_in_df fires a UserWarning for every such column even
+    # though the default it applies is correct.  Calc-output booleans (e.g.
+    # valid_sale, vacant_sale) cannot receive an extra_map entry through the load
+    # dict because they have no raw source column — so we seed extra_map here
+    # before the dtype-enforcement loop runs.
+    for operation in operation_order:
+        if operation["type"] == "calc":
+            for calc_col in operation["operations"]:
+                if calc_col in df.columns and pd.api.types.is_bool_dtype(df[calc_col]):
+                    if calc_col not in extra_map:
+                        extra_map[calc_col] = "na_false"
+
     if fields_cat is None:
         fields_cat = get_fields_categorical(settings, include_boolean=False)
     if fields_bool is None:
