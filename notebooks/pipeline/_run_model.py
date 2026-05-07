@@ -3,7 +3,7 @@
 # === cell 1 ===
 locality = "us-pa-berks"
 verbose = True
-clear_checkpoints = True
+clear_checkpoints = False
 
 # === cell 3 ===
 import init_notebooks
@@ -84,9 +84,9 @@ try_models(
     run_main=True,
     run_vacant=False,
     run_hedonic=False,
-    run_ensemble=True,
+    run_ensemble=False,
     do_shaps=False,
-    do_plots=True
+    do_plots=False
 )
 
 # === cell 16 — outlier identification ===
