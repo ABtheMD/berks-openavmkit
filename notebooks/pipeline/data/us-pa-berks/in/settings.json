@@ -492,21 +492,21 @@
           "lightgbm",
           "xgboost"
         ],
-        "skip": { "util": ["all"] }
+        "skip": { "util": ["all"], "com": ["all"], "ag": ["all"], "farm": ["all"], "ind": ["all"], "exempt": ["all"] }
       },
       "vacant": {
         "run": [
           "lightgbm",
           "xgboost"
         ],
-        "skip": { "util": ["all"] }
+        "skip": { "util": ["all"], "com": ["all"], "ag": ["all"], "farm": ["all"], "ind": ["all"], "exempt": ["all"] }
       },
       "hedonic": {
         "run": [
           "lightgbm",
           "xgboost"
         ],
-        "skip": { "util": ["all"] }
+        "skip": { "util": ["all"], "com": ["all"], "ag": ["all"], "farm": ["all"], "ind": ["all"], "exempt": ["all"] }
       }
     },
     "try_variables": {

@@ -2839,6 +2839,7 @@ def _optimize_ensemble(
     best_score = float("inf")
 
     while len(ensemble_list) > 1:
+        prev_len = len(ensemble_list)
         if verbose:
             print(f"Ensembling with : {ensemble_list}")
         best_score, best_list = _optimize_ensemble_iteration(
@@ -2853,6 +2854,12 @@ def _optimize_ensemble(
             ensemble_list,
             verbose,
         )
+        if len(ensemble_list) >= prev_len:
+            # No model was removed (e.g. all utility_sales_lookback are NaN).
+            # Cannot reduce ensemble further; keep current list as best.
+            if not best_list:
+                best_list = ensemble_list.copy()
+            break
 
     if verbose:
         print(f"-->Ensemble finished. Best score = {best_score:8.2f}, ensemble = {best_list}")
