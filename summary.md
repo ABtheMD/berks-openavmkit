@@ -434,6 +434,128 @@ Pipeline ran to completion: **exit code 0**.
 
 ---
 
+## fix/modeling-settings-structure
+
+**Branch:** `fix/modeling-settings-structure`
+**Date:** 2026-05-06
+**Status:** In progress
+
+### Goal
+Fix the two settings structure bugs that caused `run_one_model` to receive
+an empty model list and produce "No results generated" for every model group —
+even after the `feature/run-03-model` (PR #7) run completed exit code 0.
+
+### Root cause: flat `modeling.instructions.run` ignored by the pipeline
+
+`_run_models` in `openavmkit/benchmark.py` reads the model list from:
+```python
+settings_model_instructions.get(main_vacant_hedonic, {}).get("run", None)
+```
+where `main_vacant_hedonic` is `"main"`, `"vacant"`, or `"hedonic"`.
+
+So the code reads `instructions.main.run`, `instructions.vacant.run`, etc.
+
+The settings had a **flat** top-level `instructions.run` key (never read), with the
+`main/vacant/hedonic` sub-keys containing only `skip`:
+
+```json
+// WRONG (PR #7 state)
+"instructions": {
+  "run": ["assessor", "mra", "gwr", "lightgbm", "xgboost", ...],
+  "main":    { "skip": { "util": ["all"] } },
+  "vacant":  { "skip": { "util": ["all"] } },
+  "hedonic": { "skip": { "util": ["all"] } }
+}
+```
+
+Result: `models_to_run = settings_model_instructions.get("main", {}).get("run", None)` →
+`models_to_run = None` → loop skipped → "No results generated".
+
+### Root cause: flat `modeling.models.default` ignored by the pipeline
+
+`_run_models` reads the model entries from:
+```python
+settings_model.get("models").get(main_vacant_hedonic, {})
+```
+
+So it reads `models.main`, `models.vacant`, or `models.hedonic`.
+
+The settings had a **flat** `models.default` key (never read by this path):
+```json
+// WRONG (PR #7 state)
+"models": {
+  "default": {
+    "dep_vars": ["sfla", "yrblt", ...],
+    "interactions": {"default": true}
+  }
+}
+```
+
+Result: `model_entries = {}` → no `"default"` sub-key → no variables configured for any model.
+
+Additionally, the key `dep_vars` is dead code — no Python path in `benchmark.py` ever reads it.
+The code reads `ind_vars` exclusively.
+
+### Fix: restructure both sections
+
+```json
+// CORRECT (this PR)
+"instructions": {
+  "time_adjustment": {"period": "Q"},
+  "ensemble": [], "allocation": [],
+  "main":    { "run": ["lightgbm", "xgboost"], "skip": { "util": ["all"] } },
+  "vacant":  { "run": ["lightgbm", "xgboost"], "skip": { "util": ["all"] } },
+  "hedonic": { "run": ["lightgbm", "xgboost"], "skip": { "util": ["all"] } }
+},
+"models": {
+  "main":    { "default": { "ind_vars": ["sfla", "yrblt", ... 29 vars] } },
+  "vacant":  { "default": { "ind_vars": ["acreage", "land_area_sqft", ... 12 vars] } },
+  "hedonic": { "default": { "ind_vars": ["sfla", "yrblt", ... 29 vars] } }
+}
+```
+
+**Why lightgbm + xgboost only (not mra/gwr/assessor):**
+Any non-tree model triggers `auto_reduce_vars = True` in `_run_models`, which runs VIF
+(variance inflation factor) calculation via statsmodels OLS. The feature matrix
+contains NaN values for non-residential features → `MissingDataError: exog contains
+inf or nans`. Tree-based models handle NaN natively and are excluded from the VIF path.
+
+### Berks County 03-model results (with this fix)
+
+Pipeline ran with LightGBM + XGBoost. Variable selection (`try_variables`) completed
+for all model groups; model training underway for `res/main`.
+
+**Initial ensemble result for `res` (residential, main/improved):**
+| Metric | Value |
+|---|---|
+| R² | 0.712 |
+| RMSE | $123,545 |
+| Score (MAPE×100) | 61,530 |
+| Ensemble | lightgbm + xgboost |
+
+**Top variables for `res` (by `try_variables` R²):**
+| Variable | R² |
+|---|---|
+| `bldg_area_finished_sqft` | 0.416 |
+| `land_area_sqft_log` | 0.349 |
+| `bldg_age_years` | 0.254 |
+
+Full run (all model groups, main/vacant/hedonic passes) in progress — may take several
+hours given the 130k-parcel residential dataset and 29-feature model with 50-trial
+Bayesian hyperparameter search.
+
+### Known limitations
+- **MRA/GWR/assessor models excluded:** Adding these triggers `auto_reduce_vars = True`
+  → VIF fails on NaN-containing feature matrix. Fix requires either imputing NaN in
+  the feature matrix before VIF, or patching `_reduce_vars` to drop NaN rows.
+- **Spatial lag not configured:** `process.enrich.spatial_lag.model_groups` is empty.
+  All groups emit a warning and skip the spatial lag enrichment step.
+- **Non-res model groups:** `com`, `ag`, `farm`, `ind`, `exempt` have very few improved
+  sales (or none — these classes are treated as vacant sales). Model results for these
+  groups will likely show limited R² or "no results" for the `main` pass.
+
+---
+
 ## Roadmap / Future Work
 
 The pipeline to get from a seed file to a runnable openavmkit model:
@@ -446,7 +568,8 @@ The pipeline to get from a seed file to a runnable openavmkit model:
 | **3b — Fill model_groups + important.fields** | Manual (jurisdiction-specific) | ✅ Done for Berks |
 | **4a — Run 01-assemble.ipynb** | `notebooks/pipeline/01-assemble.ipynb` | ✅ Done |
 | **4b — Run 02-clean.ipynb** | `notebooks/pipeline/02-clean.ipynb` | ✅ Done |
-| **4c — Run 03-model.ipynb** | `notebooks/pipeline/03-model.ipynb` | ✅ Done |
+| **4c — Run 03-model.ipynb** | `notebooks/pipeline/03-model.ipynb` | ✅ Done (split keys + try_variables) |
+| **4c-ii — Fix settings structure → real model training** | `fix/modeling-settings-structure` | 🔄 In progress (R²=0.712 for res) |
 
 ### Step 3b: model_groups (manual, jurisdiction-specific)
 
