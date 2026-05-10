@@ -490,9 +490,8 @@ def _run_ratio_study_breakdowns(
                     "count": 0,
                 }
                 if by in cat_fields:
-                    values = np.array(sorted(
-                        str(v) for v in df[by].unique() if pd.notna(v)
-                    ))
+                    values = np.array(df[by].unique())
+                    values.sort()
                     for value in values:
                         df_sub = df[df[by].eq(value)]
                         predictions = df_sub[prediction_field].values
