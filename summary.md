@@ -434,6 +434,191 @@ Pipeline ran to completion: **exit code 0**.
 
 ---
 
+## fix/modeling-settings-structure
+
+**Branch:** `fix/modeling-settings-structure`
+**Date:** 2026-05-06
+**Status:** In progress
+
+### Goal
+Fix the two settings structure bugs that caused `run_one_model` to receive
+an empty model list and produce "No results generated" for every model group —
+even after the `feature/run-03-model` (PR #7) run completed exit code 0.
+
+### Root cause: flat `modeling.instructions.run` ignored by the pipeline
+
+`_run_models` in `openavmkit/benchmark.py` reads the model list from:
+```python
+settings_model_instructions.get(main_vacant_hedonic, {}).get("run", None)
+```
+where `main_vacant_hedonic` is `"main"`, `"vacant"`, or `"hedonic"`.
+
+So the code reads `instructions.main.run`, `instructions.vacant.run`, etc.
+
+The settings had a **flat** top-level `instructions.run` key (never read), with the
+`main/vacant/hedonic` sub-keys containing only `skip`:
+
+```json
+// WRONG (PR #7 state)
+"instructions": {
+  "run": ["assessor", "mra", "gwr", "lightgbm", "xgboost", ...],
+  "main":    { "skip": { "util": ["all"] } },
+  "vacant":  { "skip": { "util": ["all"] } },
+  "hedonic": { "skip": { "util": ["all"] } }
+}
+```
+
+Result: `models_to_run = settings_model_instructions.get("main", {}).get("run", None)` →
+`models_to_run = None` → loop skipped → "No results generated".
+
+### Root cause: flat `modeling.models.default` ignored by the pipeline
+
+`_run_models` reads the model entries from:
+```python
+settings_model.get("models").get(main_vacant_hedonic, {})
+```
+
+So it reads `models.main`, `models.vacant`, or `models.hedonic`.
+
+The settings had a **flat** `models.default` key (never read by this path):
+```json
+// WRONG (PR #7 state)
+"models": {
+  "default": {
+    "dep_vars": ["sfla", "yrblt", ...],
+    "interactions": {"default": true}
+  }
+}
+```
+
+Result: `model_entries = {}` → no `"default"` sub-key → no variables configured for any model.
+
+Additionally, the key `dep_vars` is dead code — no Python path in `benchmark.py` ever reads it.
+The code reads `ind_vars` exclusively.
+
+### Fix: restructure both sections
+
+```json
+// CORRECT (this PR)
+"instructions": {
+  "time_adjustment": {"period": "Q"},
+  "ensemble": [], "allocation": [],
+  "main":    { "run": ["lightgbm", "xgboost"], "skip": { "util": ["all"] } },
+  "vacant":  { "run": ["lightgbm", "xgboost"], "skip": { "util": ["all"] } },
+  "hedonic": { "run": ["lightgbm", "xgboost"], "skip": { "util": ["all"] } }
+},
+"models": {
+  "main":    { "default": { "ind_vars": ["sfla", "yrblt", ... 29 vars] } },
+  "vacant":  { "default": { "ind_vars": ["acreage", "land_area_sqft", ... 12 vars] } },
+  "hedonic": { "default": { "ind_vars": ["sfla", "yrblt", ... 29 vars] } }
+}
+```
+
+**Why lightgbm + xgboost only (not mra/gwr/assessor):**
+Any non-tree model triggers `auto_reduce_vars = True` in `_run_models`, which runs VIF
+(variance inflation factor) calculation via statsmodels OLS. The feature matrix
+contains NaN values for non-residential features → `MissingDataError: exog contains
+inf or nans`. Tree-based models handle NaN natively and are excluded from the VIF path.
+
+### Berks County 03-model results (with this fix)
+
+Pipeline ran to completion with LightGBM + XGBoost for `res` only (non-res groups
+skipped due to NaN feature matrix — see additional bugs below).
+
+**Final `res/main` ensemble results (`finalize_models` complete):**
+| Metric | Value |
+|---|---|
+| R² | 0.712 |
+| RMSE | $123,504 |
+| Score (best_score) | 61,517.90 |
+| Ensemble | lightgbm + xgboost |
+| Training rows | 27,564 |
+| Universe rows | 133,913 |
+
+**Top variables for `res` (by `try_variables` R²):**
+| Variable | R² |
+|---|---|
+| `bldg_area_finished_sqft` | 0.416 |
+| `land_area_sqft_log` | 0.349 |
+| `bldg_age_years` | 0.254 |
+
+Note: 26 of the 29 configured `ind_vars` don't exist in the assembled data (PA CAMA
+fields like `sfla`, `bedrooms`, `yrblt` etc. were not present in the download). Only
+3 features drove the model, explaining the moderate R².
+
+**Ratio study results for `res/main` (9,045 improved sales, 2024-01-01 – 2025-01-01):**
+| Metric | Value | IAAO standard |
+|---|---|---|
+| Median ratio (trimmed) | 0.98 | 0.90–1.10 ✅ |
+| COD (trimmed) | 28.6 | ≤ 15 for residential ❌ |
+| Median ratio by price tier | 3.6× (low) → 0.6× (high) | — |
+
+The COD of 28.6 is above the IAAO 15-point standard, reflecting the model's limited
+feature set (only 3 effective variables). The ratio gradient by price tier (over-valuing
+low-priced homes, under-valuing high-priced homes) is a classic regressive pattern
+in under-specified models — this will improve once field mappings are corrected.
+
+Output files written to `notebooks/pipeline/data/us-pa-berks/out/models/res/main/`:
+- `lightgbm/` — LightGBM predictions + SHAPs (contributions) for all datasets
+- `xgboost/` — XGBoost predictions + SHAPs
+- `ensemble/` — ensemble predictions (median blend)
+- `model_ensemble.pickle` (865 MB) — serialised ensemble model
+- `reports/ratio_study.{html,pdf,md}` — IAAO-format ratio study report
+
+### Additional bugs found and fixed during this run
+
+Three library bugs were discovered and fixed in `openavmkit/`:
+
+#### Bug 1: `_optimize_ensemble` infinite loop (`benchmark.py:2841`)
+**Root cause:** `while len(ensemble_list) > 1` never terminates when
+`utility_sales_lookback` is NaN for all individual models. `NaN > float("-inf")`
+is always False → `worst_model` stays None → `ensemble_list.remove()` never called
+→ list stays at length 2 forever.
+
+**Fix:** Added stall-detection break — if `len(ensemble_list) >= prev_len` after an
+iteration, break out and keep the current best list.
+
+**Affected:** `_optimize_ensemble` function in `openavmkit/benchmark.py`.
+Both `try_models` and `finalize_models` calls hit this; `try_models` was worked around
+by setting `run_ensemble=False`; `finalize_models` hit it in production.
+
+#### Bug 2: Non-res groups NaN crash (`benchmark.py`, hyperparameter search)
+**Root cause:** `he_id` and `land_he_id` (residential equity zone IDs) are NaN for
+COM/AG/IND/FARM/EXEMPT parcels. These appear in the shared `ind_vars` list, so
+non-residential feature matrices are all-NaN. Optuna's LightGBM hyperparameter search
+passes this to sklearn metrics → `ValueError: Input contains NaN`.
+
+**Fix (settings, not code):** Added `com`, `ag`, `farm`, `ind`, `exempt` to `skip`
+in all three instruction blocks (`main`, `vacant`, `hedonic`). Only `res` runs for now.
+Proper fix: give each model group its own `ind_vars` list excluding residential-only fields.
+
+#### Bug 3: Ratio study mixed-type sort (`ratio_study.py:494`)
+**Root cause:** `np.array(df[by].unique()).sort()` fails when a categorical column
+contains both NaN (float) and string values — Python 3 can't compare them.
+
+**Fix:** `np.array(sorted(str(v) for v in df[by].unique() if pd.notna(v)))` —
+filters NaN, coerces to str, uses Python's `sorted()` instead of numpy `.sort()`.
+
+### `_run_model.py` settings changed from defaults
+| Setting | Before | After | Reason |
+|---|---|---|---|
+| `clear_checkpoints` | `True` | `False` | Preserve 20-min spatial lag pickle across reruns |
+| `do_plots` in `try_models` | `True` | `False` | `plt.show()` with TkAgg backend blocks indefinitely |
+| `run_ensemble` in `try_models` | `True` | `False` | Bug 1 above; ensemble still runs in `finalize_models` |
+
+### Known limitations
+- **MRA/GWR/assessor models excluded:** Adding these triggers `auto_reduce_vars = True`
+  → VIF fails on NaN-containing feature matrix. Fix requires imputing NaN before VIF
+  or patching `_reduce_vars` to drop NaN rows.
+- **Spatial lag not configured:** `process.enrich.spatial_lag.model_groups` is empty.
+  All groups emit a warning and skip spatial lag enrichment.
+- **Non-res model groups deferred:** `com`, `ag`, `farm`, `ind`, `exempt` skipped due
+  to Bug 2. Need separate `ind_vars` per group (land-based features only for non-res).
+- **Only 3 effective features:** Most PA CAMA fields (`sfla`, `bedrooms`, `yrblt`, etc.)
+  not present in assembled data. Field mapping review needed to pull these through.
+
+---
+
 ## Roadmap / Future Work
 
 The pipeline to get from a seed file to a runnable openavmkit model:
@@ -446,7 +631,8 @@ The pipeline to get from a seed file to a runnable openavmkit model:
 | **3b — Fill model_groups + important.fields** | Manual (jurisdiction-specific) | ✅ Done for Berks |
 | **4a — Run 01-assemble.ipynb** | `notebooks/pipeline/01-assemble.ipynb` | ✅ Done |
 | **4b — Run 02-clean.ipynb** | `notebooks/pipeline/02-clean.ipynb` | ✅ Done |
-| **4c — Run 03-model.ipynb** | `notebooks/pipeline/03-model.ipynb` | ✅ Done |
+| **4c — Run 03-model.ipynb** | `notebooks/pipeline/03-model.ipynb` | ✅ Done (split keys + try_variables) |
+| **4c-ii — Fix settings structure → real model training** | `fix/modeling-settings-structure` | ✅ Done — R²=0.712, COD=28.6, ratio_study complete |
 
 ### Step 3b: model_groups (manual, jurisdiction-specific)
 

@@ -1,14 +1,23 @@
 # headless 03-model execution
+# Usage: LOCALITY=us-pa-berks python _run_model.py
+#   or:  python _run_model.py us-pa-berks
 
 # === cell 1 ===
-locality = "us-pa-berks"
+import sys as _sys
+locality = _sys.argv[1] if len(_sys.argv) > 1 else None
 verbose = True
-clear_checkpoints = True
+clear_checkpoints = False
 
 # === cell 3 ===
 import init_notebooks
 init_notebooks.setup_environment()
 locality = init_notebooks.check_for_different_locality(locality)
+if not locality:
+    raise SystemExit(
+        "Error: locality not specified.\n"
+        "Usage: python _run_model.py <locality-slug>\n"
+        "   or: LOCALITY=<locality-slug> python _run_model.py"
+    )
 
 # === cell 4 ===
 from openavmkit.pipeline import (
@@ -84,9 +93,9 @@ try_models(
     run_main=True,
     run_vacant=False,
     run_hedonic=False,
-    run_ensemble=True,
+    run_ensemble=False,
     do_shaps=False,
-    do_plots=True
+    do_plots=False
 )
 
 # === cell 16 — outlier identification ===
