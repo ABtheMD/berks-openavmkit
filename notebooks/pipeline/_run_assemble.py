@@ -1,21 +1,23 @@
 # headless 01-assemble execution
+# Usage: python _run_assemble.py <locality-slug>
+#   or:  LOCALITY=<locality-slug> python _run_assemble.py
 
 # === cell 1 ===
-# Change these as desired
-
-# The slug of the locality you are currently working on
-locality = "us-pa-berks"
-
-# Whether to print out a lot of stuff (can help with debugging) or stay mostly quiet
+import sys as _sys
+locality = _sys.argv[1] if len(_sys.argv) > 1 else None
 verbose = True
-
-# Clear previous state for this notebook and start fresh
 clear_checkpoints = True
 
 # === cell 3 ===
 import init_notebooks
 init_notebooks.setup_environment()
 locality = init_notebooks.check_for_different_locality(locality)
+if not locality:
+    raise SystemExit(
+        "Error: locality not specified.\n"
+        "Usage: python _run_assemble.py <locality-slug>\n"
+        "   or: LOCALITY=<locality-slug> python _run_assemble.py"
+    )
 
 # === cell 4 ===
 # import OpenAVMkit:
