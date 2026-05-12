@@ -375,6 +375,10 @@ def run_configure(locality: str, verbose: bool):
         print(f"[harness] WARNING: Claude settings generation failed: {e}", file=sys.stderr)
         print("[harness] Proceeding with base settings (no model_groups configured).", file=sys.stderr)
         return
+    except Exception as e:
+        print(f"[harness] WARNING: Claude API call failed: {type(e).__name__}: {e}", file=sys.stderr)
+        print("[harness] Proceeding with base settings (no model_groups configured).", file=sys.stderr)
+        return
 
     merged = _merge_settings(base_settings, delta)
     _save_settings(locality, merged)
@@ -457,6 +461,9 @@ def run_model(locality: str, iteration_count: int, verbose: bool):
                 print(f"[harness] settings.json updated for iteration {i + 2}.")
             except ClaudeParseError as e:
                 print(f"[harness] WARNING: Claude refinement failed: {e}", file=sys.stderr)
+                print(f"[harness] Continuing with current settings.", file=sys.stderr)
+            except Exception as e:
+                print(f"[harness] WARNING: Claude API call failed: {type(e).__name__}: {e}", file=sys.stderr)
                 print(f"[harness] Continuing with current settings.", file=sys.stderr)
 
     best = _best_iteration(metrics_history, jurisdiction_tier)
