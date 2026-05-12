@@ -226,9 +226,16 @@ def _save_settings(locality: str, settings: dict):
 
 
 def _merge_settings(base: dict, delta: dict) -> dict:
+    """
+    JSON Merge Patch (RFC 7396): keys in delta override base; keys absent
+    from delta are preserved. Null values in delta delete the key.
+    Applied recursively for nested dicts.
+    """
     result = dict(base)
     for k, v in delta.items():
-        if isinstance(v, dict) and isinstance(result.get(k), dict):
+        if v is None:
+            result.pop(k, None)
+        elif isinstance(v, dict) and isinstance(result.get(k), dict):
             result[k] = _merge_settings(result[k], v)
         else:
             result[k] = v
@@ -282,7 +289,7 @@ def _passes_iaao(metrics: dict, jurisdiction_tier: str) -> bool:
     return True
 
 
-def _best_iteration(metrics_history: list) -> int:
+def _best_iteration(metrics_history: list, jurisdiction_tier: str = "large_to_mid") -> int:
     best_iter = None
     best_score = float("inf")
 
@@ -294,7 +301,7 @@ def _best_iteration(metrics_history: list) -> int:
                     continue
                 score += abs(m.get("median_ratio", 1.0) - 1.0)
                 bucket = _GROUP_CLASS_BUCKET.get(group, "residential")
-                cod_upper = _IAAO_COD_UPPER[bucket]["large_to_mid"]
+                cod_upper = _IAAO_COD_UPPER[bucket].get(jurisdiction_tier, 20.0)
                 score += max(0.0, m.get("cod", 0.0) - cod_upper)
             if score < best_score:
                 best_score = score
@@ -308,14 +315,17 @@ def _print_metrics_summary(metrics: dict, jurisdiction_tier: str):
     for group, m in metrics.items():
         bucket = _GROUP_CLASS_BUCKET.get(group, "residential")
         cod_upper = _IAAO_COD_UPPER[bucket].get(jurisdiction_tier, 20.0)
-        ratio_ok = _IAAO_RATIO_LO <= m["median_ratio"] <= _IAAO_RATIO_HI
-        cod_ok = m["cod"] <= cod_upper
+        ratio = m.get("median_ratio", 0.0)
+        cod = m.get("cod", 0.0)
+        count = m.get("count", 0)
+        ratio_ok = _IAAO_RATIO_LO <= ratio <= _IAAO_RATIO_HI
+        cod_ok = cod <= cod_upper
         status = "PASS" if (ratio_ok and cod_ok) else "FAIL"
         print(
             f"  {status} {group:8s}  "
-            f"ratio={m['median_ratio']:.3f} (target 0.95-1.05)  "
-            f"COD={m['cod']:.1f} (target <={cod_upper})  "
-            f"n={m['count']}"
+            f"ratio={ratio:.3f} (target 0.95-1.05)  "
+            f"COD={cod:.1f} (target <={cod_upper})  "
+            f"n={count}"
         )
 
 
@@ -410,9 +420,10 @@ def run_model(locality: str, iteration_count: int, verbose: bool):
         current_settings = _load_settings(locality)
         _save_settings_snapshot(data_dir, i, current_settings)
 
+        extra = ["--clear-checkpoints"] if i == 0 else []
         rc = _run_subprocess(
             _SCRIPTS_DIR / "_run_model.py", locality, verbose,
-            extra_args=["--clear-checkpoints"],
+            extra_args=extra,
         )
         if rc != 0:
             print(f"[harness] model run {i + 1} failed (exit {rc}).", file=sys.stderr)
@@ -421,6 +432,12 @@ def run_model(locality: str, iteration_count: int, verbose: bool):
         metrics = _read_model_metrics(data_dir)
         _save_metrics_snapshot(data_dir, i + 1, metrics)
         metrics_history.append({i + 1: metrics})
+
+        if not metrics:
+            print(f"[harness] WARNING: No model metrics found after run {i + 1}.", file=sys.stderr)
+            if i < iteration_count - 1:
+                print(f"[harness] Continuing to next iteration...", file=sys.stderr)
+            continue
 
         _print_metrics_summary(metrics, jurisdiction_tier)
 
@@ -442,7 +459,7 @@ def run_model(locality: str, iteration_count: int, verbose: bool):
                 print(f"[harness] WARNING: Claude refinement failed: {e}", file=sys.stderr)
                 print(f"[harness] Continuing with current settings.", file=sys.stderr)
 
-    best = _best_iteration(metrics_history)
+    best = _best_iteration(metrics_history, jurisdiction_tier)
     print(
         f"\n[harness] {iteration_count} iteration(s) exhausted. "
         f"Best results were in iteration {best}. "

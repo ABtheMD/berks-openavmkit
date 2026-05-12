@@ -3,7 +3,6 @@ import sys
 import json
 import pytest
 from pathlib import Path
-from unittest.mock import patch, MagicMock
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
@@ -130,6 +129,13 @@ def test_merge_settings_preserves_base_nested():
     result = harness._merge_settings(base, delta)
     assert "res" in result["modeling"]["model_groups"]
     assert "com" in result["modeling"]["model_groups"]
+
+def test_merge_settings_null_deletes_key():
+    base = {"modeling": {"skip": {"com": ["all"]}, "x": 1}}
+    delta = {"modeling": {"skip": None}}
+    result = harness._merge_settings(base, delta)
+    assert "skip" not in result["modeling"]
+    assert result["modeling"]["x"] == 1
 
 
 # ---------------------------------------------------------------------------
