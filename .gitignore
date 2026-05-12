@@ -13,6 +13,7 @@ notebooks/pipeline/data/**/*.gpkg
 notebooks/pipeline/data/**/*.csv
 notebooks/pipeline/out/
 notebooks/pipeline/cache/
+notebooks/pipeline/_run_model_out.txt
 notebooks/cache/
 notebooks/examples/*.gpkg
 notebooks/research/richie_2025/out/
