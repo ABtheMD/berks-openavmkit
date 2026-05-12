@@ -97,6 +97,21 @@ def test_read_metrics_returns_dict(tmp_path):
     assert "count" in metrics["res"]
     assert metrics["res"]["count"] == 5
 
+def test_read_metrics_cod_uses_mean_not_median(tmp_path):
+    """COD = mean of absolute deviations from median / median × 100 (IAAO standard)."""
+    group_dir = tmp_path / "out" / "models" / "res" / "main" / "ensemble"
+    group_dir.mkdir(parents=True)
+    # Ratios: [0.80, 1.00, 1.00, 1.00, 1.20] → median=1.00
+    # Absolute deviations: [0.20, 0.00, 0.00, 0.00, 0.20]
+    # Mean of deviations: 0.08, Median of deviations: 0.00
+    # COD (correct, using mean) = 0.08 / 1.00 * 100 = 8.0
+    # COD (wrong, using median) = 0.00 / 1.00 * 100 = 0.0
+    df = pd.DataFrame({"prediction_ratio": [0.80, 1.00, 1.00, 1.00, 1.20]})
+    df.to_parquet(group_dir / "pred_test.parquet", index=False)
+
+    metrics = harness._read_model_metrics(tmp_path)
+    assert metrics["res"]["cod"] == pytest.approx(8.0, abs=0.1)
+
 def test_read_metrics_no_models_returns_empty(tmp_path):
     (tmp_path / "out" / "models").mkdir(parents=True)
     metrics = harness._read_model_metrics(tmp_path)

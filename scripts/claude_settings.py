@@ -49,10 +49,11 @@ Rules:
 1. model_groups: Map each unique class value to a group. Use the filter
    syntax ["==", "class", "<value>"]. Skip groups with <50 sales entirely
    (set skip: ["all"]).
-2. HE fields (he_id, land_he_id): If he_id_fill_rate_by_class for a group
-   is <0.05, add those fields to that group's exclude_features list.
-   If has_spatial_data is true for the locality, flag spatial_he_inheritance=true
-   for those groups instead of excluding.
+2. HE fields (he_id, land_he_id): Check both he_id_fill_rate_by_class and
+   land_he_id_fill_rate_by_class in the data profile. If either fill rate
+   for a group is <0.05, add the corresponding field(s) to that group's
+   exclude_features list. If has_spatial_data is true for the locality,
+   flag spatial_he_inheritance=true for those groups instead of excluding.
 3. Respond with a JSON object with exactly two keys:
    - "settings": the settings delta (will be merged into settings.json)
    - "reasoning": a plain-text explanation of each decision you made

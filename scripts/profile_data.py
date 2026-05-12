@@ -84,6 +84,7 @@ def build_data_profile(locality_slug: str, data_base_dir: Path = None) -> dict:
         "class_distribution": class_distribution,
         "he_id_fill_rate_by_class": he_id_fill,
         "land_he_id_fill_rate_by_class": land_he_id_fill,
+        "has_spatial_data": not df_geo.empty,
         "available_columns": all_columns,
         "jurisdiction_tier": infer_jurisdiction_tier(total_parcels, annual_sales_volume),
     }

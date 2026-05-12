@@ -86,8 +86,9 @@ def _parse_args(argv=None):
         help=f"Stop after this stage. Options: {', '.join(_STAGE_ORDER)}",
     )
     parser.add_argument(
-        "--iteration-count", type=int, default=3,
-        help="Max Claude iterations on model stage (default: 3)",
+        "--iteration-count", type=int, default=3, choices=range(1, 100),
+        metavar="N",
+        help="Max Claude iterations on model stage (default: 3, min: 1)",
     )
     parser.add_argument("--verbose", action="store_true", help="Stream subprocess output")
     return parser.parse_args(argv)
@@ -188,7 +189,7 @@ def _read_model_metrics(locality_data_dir: Path) -> dict:
         if len(ratios) == 0:
             continue
         median = float(ratios.median())
-        cod = float((ratios - median).abs().median() / median * 100)
+        cod = float((ratios - median).abs().mean() / median * 100)
         metrics[group_dir.name] = {
             "median_ratio": round(median, 4),
             "cod": round(cod, 2),
@@ -424,10 +425,8 @@ def run_model(locality: str, iteration_count: int, verbose: bool):
         current_settings = _load_settings(locality)
         _save_settings_snapshot(data_dir, i, current_settings)
 
-        extra = ["--clear-checkpoints"] if i == 0 else []
         rc = _run_subprocess(
             _SCRIPTS_DIR / "_run_model.py", locality, verbose,
-            extra_args=extra,
         )
         if rc != 0:
             print(f"[harness] model run {i + 1} failed (exit {rc}).", file=sys.stderr)
@@ -466,13 +465,16 @@ def run_model(locality: str, iteration_count: int, verbose: bool):
                 print(f"[harness] WARNING: Claude API call failed: {type(e).__name__}: {e}", file=sys.stderr)
                 print(f"[harness] Continuing with current settings.", file=sys.stderr)
 
-    best = _best_iteration(metrics_history, jurisdiction_tier)
-    print(
-        f"\n[harness] {iteration_count} iteration(s) exhausted. "
-        f"Best results were in iteration {best}. "
-        f"See out/settings_iter_{best - 1}.json for those settings.",
-        file=sys.stderr,
-    )
+    if not metrics_history:
+        print(f"\n[harness] No model iterations completed.", file=sys.stderr)
+    else:
+        best = _best_iteration(metrics_history, jurisdiction_tier)
+        print(
+            f"\n[harness] {iteration_count} iteration(s) exhausted. "
+            f"Best results were in iteration {best}. "
+            f"See out/settings_iter_{best - 1}.json for those settings.",
+            file=sys.stderr,
+        )
 
 
 def run_stages(

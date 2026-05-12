@@ -47,7 +47,7 @@ def test_profile_returns_required_keys(tmp_locality):
     for key in [
         "locality", "total_parcels", "total_sales", "annual_sales_volume",
         "class_distribution", "he_id_fill_rate_by_class",
-        "available_columns", "jurisdiction_tier",
+        "has_spatial_data", "available_columns", "jurisdiction_tier",
     ]:
         assert key in profile, f"Missing key: {key}"
 
