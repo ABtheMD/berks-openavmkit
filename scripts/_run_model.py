@@ -1,12 +1,12 @@
 # headless 03-model execution
-# Usage: LOCALITY=us-pa-berks python _run_model.py
-#   or:  python _run_model.py us-pa-berks
+# Usage: python _run_model.py <locality-slug> [--clear-checkpoints]
+#   or:  LOCALITY=<locality-slug> python _run_model.py
 
 # === cell 1 ===
 import sys as _sys
-locality = _sys.argv[1] if len(_sys.argv) > 1 else None
+locality = _sys.argv[1] if len(_sys.argv) > 1 and not _sys.argv[1].startswith("--") else None
 verbose = True
-clear_checkpoints = False
+clear_checkpoints = "--clear-checkpoints" in _sys.argv
 
 # === cell 3 ===
 import init_notebooks

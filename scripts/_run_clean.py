@@ -1,7 +1,10 @@
 # headless 02-clean execution
+# Usage: python _run_clean.py <locality-slug>
+#   or:  LOCALITY=<locality-slug> python _run_clean.py
 
 # === cell 1 ===
-locality = "us-pa-berks"
+import sys as _sys
+locality = _sys.argv[1] if len(_sys.argv) > 1 else None
 verbose = True
 clear_checkpoints = True
 sales_scrutiny_drop_outliers = False   # flag only, don't drop
@@ -11,6 +14,12 @@ sales_scrutiny_drop_heuristics = True  # drop heuristic outliers
 import init_notebooks
 init_notebooks.setup_environment()
 locality = init_notebooks.check_for_different_locality(locality)
+if not locality:
+    raise SystemExit(
+        "Error: locality not specified.\n"
+        "Usage: python _run_clean.py <locality-slug>\n"
+        "   or: LOCALITY=<locality-slug> python _run_clean.py"
+    )
 
 # === cell 4 ===
 from openavmkit.pipeline import (
