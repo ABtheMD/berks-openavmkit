@@ -252,3 +252,56 @@ def test_run_stages_exits_on_subprocess_failure(monkeypatch, tmp_path):
 
     with pytest.raises(SystemExit):
         harness.run_stages("us-pa-berks", "assemble", "assemble", 1, verbose=False)
+
+
+def test_model_recovery_continues_after_subprocess_failure(monkeypatch, tmp_path):
+    """When a model subprocess fails, the harness should continue to the next
+    iteration instead of raising SystemExit."""
+    call_count = {"n": 0}
+
+    def fake_run_subprocess(script, locality, verbose, extra_args=None):
+        if "_run_model" in str(script):
+            call_count["n"] += 1
+            # First model run succeeds, second fails, third succeeds
+            return 1 if call_count["n"] == 2 else 0
+        return 0
+
+    monkeypatch.setattr(harness, "_run_subprocess", fake_run_subprocess)
+
+    # Set up locality data dir with required structure
+    data_dir = tmp_path / "us-pa-berks"
+    data_dir.mkdir()
+    settings_path = data_dir / "in" / "settings.json"
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text(json.dumps({"modeling": {"model_groups": {"res": {}}}}))
+
+    monkeypatch.setattr(harness, "_NOTEBOOKS_PIPELINE", tmp_path)
+    monkeypatch.setattr(harness, "_locality_data_dir", lambda loc: data_dir)
+    monkeypatch.setattr(harness, "_settings_path", lambda loc: settings_path)
+
+    # Stub out build_data_profile to avoid needing real parquets
+    monkeypatch.setattr(
+        "profile_data.build_data_profile",
+        lambda *a, **kw: {"jurisdiction_tier": "large_to_mid"},
+    )
+
+    # Force IAAO to always report outside range so we never exit early
+    monkeypatch.setattr(harness, "_passes_iaao", lambda *a, **kw: False)
+
+    # Stub out Claude refinement to avoid API calls
+    monkeypatch.setattr(
+        "claude_settings.refine_after_model",
+        lambda *a, **kw: {},
+    )
+
+    # Create a fake pred_test.parquet for the successful runs
+    group_dir = data_dir / "out" / "models" / "res" / "main" / "ensemble"
+    group_dir.mkdir(parents=True)
+    df = pd.DataFrame({"prediction_ratio": [0.95, 1.05, 1.00, 1.10, 0.90]})
+    df.to_parquet(group_dir / "pred_test.parquet", index=False)
+
+    # Should NOT raise SystemExit — recovery should catch the failure
+    harness.run_model("us-pa-berks", iteration_count=3, verbose=False)
+
+    # All 3 iterations should have been attempted
+    assert call_count["n"] == 3
