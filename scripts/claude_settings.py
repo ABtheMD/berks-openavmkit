@@ -4,11 +4,12 @@ claude_settings.py
 All Claude API interactions for the harness. Has no knowledge of file paths
 or pipeline stage sequencing — it takes dicts and returns dicts.
 
-Two public functions:
+Three public functions:
   generate_initial()     — called during the configure stage
   refine_after_model()   — called between model iteration runs
+  refine_field_mapping() — called when field mappings need correction
 
-Both write reasoning to a JSONL log file and raise ClaudeParseError if
+All write reasoning to a JSONL log file and raise ClaudeParseError if
 Claude's response cannot be parsed after one retry.
 """
 import json
@@ -17,6 +18,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import anthropic
+
+from validate_field_mapping import validate_field_mapping
 
 # ---------------------------------------------------------------------------
 # IAAO Standard on Ratio Studies — COD ranges by property class and tier
@@ -90,6 +93,39 @@ Rules:
 
 Return ONLY the JSON object. No preamble, no markdown prose outside the object.
 """.format(iaao_table=_IAAO_COD_TABLE).strip()
+
+_SYSTEM_FIELD_MAPPING = """
+You are a mass appraisal data expert reviewing field mappings for the
+openavmkit pipeline. You will receive a data profile with column_profiles
+(showing every column in every downloaded parquet file) and the current
+settings.json (which contains fuzzy-matched field mappings that may be
+wrong or incomplete).
+
+Your job is to review and correct the data.load section so that critical
+pipeline fields are mapped to the correct source columns.
+
+Critical fields the pipeline requires (must be mapped in at least one source):
+  - key: parcel identifier (primary key for all joins)
+  - sale_price: transaction sale amount (numeric)
+  - sale_date: transaction date
+  - class: property classification code (used for model_group assignment)
+
+Rules:
+1. Review each source's load mapping. If a mapped source column does NOT
+   appear in that source's column_profiles, find the correct column name
+   from the available columns.
+2. If a critical field is not mapped in any source, find the best matching
+   column from column_profiles and add the mapping.
+3. Do NOT change mappings that are already correct (source column exists
+   in the parquet and the canonical name is appropriate).
+4. Only modify the data.load section. Do not touch modeling, field_classification,
+   or any other section.
+5. Respond with a JSON object with exactly two keys:
+   - "settings": the settings delta (only data.load changes)
+   - "reasoning": explanation of each mapping change and why
+
+Return ONLY the JSON object. No preamble, no markdown prose outside the object.
+""".strip()
 
 
 # ---------------------------------------------------------------------------
@@ -193,6 +229,19 @@ def _call_with_retry(client, messages: list, system: str) -> dict:
                 f"First response: {text[:300]}\n"
                 f"Second response: {retry_text[:300]}"
             )
+
+
+def _merge_settings(base: dict, delta: dict) -> dict:
+    """JSON Merge Patch (RFC 7396) — local copy to avoid circular import."""
+    result = dict(base)
+    for k, v in delta.items():
+        if v is None:
+            result.pop(k, None)
+        elif isinstance(v, dict) and isinstance(result.get(k), dict):
+            result[k] = _merge_settings(result[k], v)
+        else:
+            result[k] = v
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -537,6 +586,92 @@ def _validate_and_reprompt(
 
 
 # ---------------------------------------------------------------------------
+# Field mapping validation + re-prompt helper
+# ---------------------------------------------------------------------------
+
+def _validate_and_reprompt_field_mapping(
+    client,
+    messages: list,
+    system: str,
+    settings_delta: dict,
+    data_profile: dict,
+    current_settings: dict,
+    reasoning_log: Path,
+) -> dict | None:
+    """
+    Validate a field mapping delta. If errors found, re-prompt Claude once.
+
+    Returns the delta if validation passes, or None if unfixable.
+    Unlike _validate_and_reprompt(), field mapping errors cannot be recovered
+    by stripping — a missing critical field means the pipeline cannot run.
+    """
+    merged = _merge_settings(current_settings, settings_delta)
+    result = validate_field_mapping(merged, data_profile)
+
+    if not result["errors"]:
+        return settings_delta
+
+    # Log errors
+    if reasoning_log is not None:
+        _write_reasoning(
+            "Field mapping validation errors:\n"
+            + "\n".join(f"- {e}" for e in result["errors"])
+            + ("\nWarnings:\n" + "\n".join(f"- {w}" for w in result["warnings"]) if result["warnings"] else ""),
+            "field_mapping_validation",
+            reasoning_log,
+        )
+
+    # Build re-prompt
+    error_list = "\n".join(f"- {e}" for e in result["errors"])
+    warning_list = "\n".join(f"- {w}" for w in result["warnings"])
+    reprompt_content = (
+        f"Your field mapping delta still has validation errors:\n{error_list}\n\n"
+        + (f"Warnings:\n{warning_list}\n\n" if warning_list else "")
+        + f"Current merged settings data.load:\n"
+        f"```json\n{json.dumps(merged.get('data', {}).get('load', {}), indent=2)}\n```\n\n"
+        f"Please provide a corrected settings delta that fixes these errors.\n"
+        f'Respond with ONLY a JSON object with keys "settings" and "reasoning".'
+    )
+
+    reprompt_messages = messages + [
+        {
+            "role": "assistant",
+            "content": json.dumps({"settings": settings_delta, "reasoning": ""}),
+        },
+        {"role": "user", "content": reprompt_content},
+    ]
+
+    try:
+        reprompt_parsed = _call_with_retry(client, reprompt_messages, system)
+        reprompt_delta = reprompt_parsed.get("settings", reprompt_parsed)
+        reprompt_reasoning = reprompt_parsed.get("reasoning", "")
+
+        if reasoning_log is not None:
+            _write_reasoning(
+                reprompt_reasoning, "refine_field_mapping_reprompt", reasoning_log
+            )
+
+        # Validate the re-prompt response
+        reprompt_merged = _merge_settings(current_settings, reprompt_delta)
+        reprompt_result = validate_field_mapping(reprompt_merged, data_profile)
+
+        if reprompt_result["errors"]:
+            if reasoning_log is not None:
+                _write_reasoning(
+                    "Re-prompt still has field mapping errors:\n"
+                    + "\n".join(f"- {e}" for e in reprompt_result["errors"]),
+                    "field_mapping_validation",
+                    reasoning_log,
+                )
+            return None
+
+        return reprompt_delta
+
+    except ClaudeParseError:
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -647,4 +782,57 @@ def refine_after_model(
         client, messages, _SYSTEM_REFINE,
         settings_delta, data_profile, current_settings,
         log_path, f"refine_iter_{iteration}",
+    )
+
+
+def refine_field_mapping(
+    data_profile: dict,
+    current_settings: dict,
+    reasoning_log: Path = None,
+) -> dict | None:
+    """
+    Review and correct field mappings using Claude.
+
+    Called when validate_field_mapping() finds errors in the fuzzy-matched
+    mappings. Claude reviews column_profiles and fixes wrong/missing mappings.
+
+    Parameters
+    ----------
+    data_profile : dict
+        Output of profile_data.build_data_profile()
+    current_settings : dict
+        The settings.json with fuzzy-matched data.load section
+    reasoning_log : Path, optional
+        File path to append Claude's reasoning (JSONL format)
+
+    Returns
+    -------
+    dict or None : settings delta for the data section, or None if Claude
+                   cannot fix the mapping errors after one re-prompt
+    """
+    client = anthropic.Anthropic()
+    messages = [
+        {
+            "role": "user",
+            "content": (
+                f"Data profile (including column_profiles for each source):\n"
+                f"```json\n{json.dumps(data_profile, indent=2)}\n```\n\n"
+                f"Current settings.json (data.load section needs review):\n"
+                f"```json\n{json.dumps(current_settings, indent=2)}\n```\n\n"
+                "Review and correct the field mappings."
+            ),
+        }
+    ]
+    parsed = _call_with_retry(client, messages, _SYSTEM_FIELD_MAPPING)
+    settings_delta = parsed.get("settings", parsed)
+    reasoning = parsed.get("reasoning", "")
+
+    log_path = Path(reasoning_log) if reasoning_log is not None else None
+    if log_path is not None:
+        _write_reasoning(reasoning, "refine_field_mapping", log_path)
+
+    return _validate_and_reprompt_field_mapping(
+        client, messages, _SYSTEM_FIELD_MAPPING,
+        settings_delta, data_profile, current_settings,
+        log_path,
     )

@@ -24,6 +24,14 @@ from pathlib import Path
 import pandas as pd
 
 # ---------------------------------------------------------------------------
+# Exceptions
+# ---------------------------------------------------------------------------
+
+class FieldMappingError(Exception):
+    """Raised when field mappings cannot be resolved after Claude refinement."""
+
+
+# ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
@@ -361,7 +369,8 @@ def run_configure(locality: str, verbose: bool):
 
     sys.path.insert(0, str(_SCRIPTS_DIR))
     from profile_data import build_data_profile
-    from claude_settings import generate_initial, ClaudeParseError
+    from claude_settings import generate_initial, refine_field_mapping, ClaudeParseError
+    from validate_field_mapping import validate_field_mapping
 
     data_dir = _locality_data_dir(locality)
     data_profile = build_data_profile(locality, data_base_dir=data_dir.parent)
@@ -370,6 +379,43 @@ def run_configure(locality: str, verbose: bool):
     reasoning_log = data_dir / "out" / "claude_reasoning.jsonl"
     reasoning_log.parent.mkdir(parents=True, exist_ok=True)
 
+    # --- Field mapping validation + Claude refinement ---
+    fm_result = validate_field_mapping(base_settings, data_profile)
+
+    if fm_result["errors"]:
+        print(f"[harness] Field mapping has {len(fm_result['errors'])} error(s). Calling Claude to fix...")
+        for e in fm_result["errors"]:
+            print(f"  ERROR: {e}")
+        for w in fm_result["warnings"]:
+            print(f"  WARNING: {w}")
+
+        try:
+            fm_delta = refine_field_mapping(
+                data_profile, base_settings, reasoning_log=reasoning_log,
+            )
+        except ClaudeParseError as e:
+            print(f"[harness] WARNING: Claude field mapping refinement failed: {e}", file=sys.stderr)
+            fm_delta = None
+        except Exception as e:
+            print(f"[harness] WARNING: Claude API call failed: {type(e).__name__}: {e}", file=sys.stderr)
+            fm_delta = None
+
+        if fm_delta is None:
+            raise FieldMappingError(
+                f"Field mapping errors could not be resolved:\n"
+                + "\n".join(f"  - {e}" for e in fm_result["errors"])
+            )
+
+        base_settings = _merge_settings(base_settings, fm_delta)
+        _save_settings(locality, base_settings)
+        print(f"[harness] Field mappings corrected by Claude.")
+    else:
+        if fm_result["warnings"]:
+            for w in fm_result["warnings"]:
+                print(f"[harness] WARNING: {w}")
+        print(f"[harness] Field mappings valid.")
+
+    # --- Model groups generation ---
     try:
         delta = generate_initial(data_profile, base_settings, reasoning_log=reasoning_log)
     except ClaudeParseError as e:

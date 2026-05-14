@@ -10,6 +10,7 @@ from claude_settings import (
     ClaudeParseError,
     generate_initial,
     refine_after_model,
+    refine_field_mapping,
     _extract_json_block,
     validate_settings_delta,
 )
@@ -777,3 +778,118 @@ def test_generate_initial_logs_violations(tmp_path):
     log_content = log_path.read_text()
     assert "validation" in log_content
     assert "school" in log_content
+
+
+# ---------------------------------------------------------------------------
+# refine_field_mapping
+# ---------------------------------------------------------------------------
+
+FIELD_MAPPING_SETTINGS = {
+    "data": {
+        "load": {
+            "cama_master": {
+                "filename": "cama_master.parquet",
+                "load": {
+                    "key": "parid",
+                    "sale_date": "saledt",
+                    "class": "class",
+                    # sale_price intentionally missing — Claude should fix
+                },
+            },
+        }
+    }
+}
+
+FIELD_MAPPING_PROFILE = {
+    "locality": "us-pa-test",
+    "total_parcels": 5000,
+    "total_sales": 1000,
+    "annual_sales_volume": 500,
+    "class_distribution": {"R": {"parcels": 4000, "sales": 800}},
+    "he_id_fill_rate_by_class": {"R": 0.98},
+    "land_he_id_fill_rate_by_class": {"R": 0.97},
+    "has_spatial_data": True,
+    "column_profiles": {
+        "cama_master": {
+            "parid": {"dtype": "string", "non_null": 5000, "unique": 5000},
+            "price": {"dtype": "float", "non_null": 3000, "unique": 2000},
+            "saledt": {"dtype": "string", "non_null": 3000, "unique": 2500},
+            "class": {"dtype": "string", "non_null": 5000, "unique": 5},
+        },
+    },
+    "jurisdiction_tier": "large_to_mid",
+}
+
+
+def test_refine_field_mapping_returns_corrected_delta(tmp_path):
+    """Claude returns a delta that adds the missing sale_price mapping."""
+    good_delta = {
+        "data": {
+            "load": {
+                "cama_master": {
+                    "load": {
+                        "sale_price": "price",
+                    }
+                }
+            }
+        }
+    }
+    response = json.dumps({"settings": good_delta, "reasoning": "Added sale_price mapping."})
+    with patch("claude_settings.anthropic.Anthropic") as MockClient:
+        MockClient.return_value.messages.create.return_value = _make_mock_response(response)
+        result = refine_field_mapping(
+            FIELD_MAPPING_PROFILE, FIELD_MAPPING_SETTINGS,
+            reasoning_log=tmp_path / "log.jsonl",
+        )
+    assert result is not None
+    assert "data" in result
+
+def test_refine_field_mapping_reprompts_on_invalid(tmp_path):
+    """If Claude's first response still has errors, re-prompt occurs."""
+    # First response: still missing sale_price
+    bad_delta = {"data": {"load": {"cama_master": {"load": {"livunit": "livunit"}}}}}
+    # Second response: fixes it
+    good_delta = {"data": {"load": {"cama_master": {"load": {"sale_price": "price"}}}}}
+    bad_resp = json.dumps({"settings": bad_delta, "reasoning": "try 1"})
+    good_resp = json.dumps({"settings": good_delta, "reasoning": "fixed"})
+
+    with patch("claude_settings.anthropic.Anthropic") as MockClient:
+        MockClient.return_value.messages.create.side_effect = [
+            _make_mock_response(bad_resp),
+            _make_mock_response(good_resp),
+        ]
+        result = refine_field_mapping(
+            FIELD_MAPPING_PROFILE, FIELD_MAPPING_SETTINGS,
+            reasoning_log=tmp_path / "log.jsonl",
+        )
+    assert MockClient.return_value.messages.create.call_count == 2
+    assert result is not None
+
+def test_refine_field_mapping_returns_none_when_unfixable(tmp_path):
+    """If both attempts fail validation, return None."""
+    bad_delta = {"data": {"load": {"cama_master": {"load": {"livunit": "livunit"}}}}}
+    bad_resp = json.dumps({"settings": bad_delta, "reasoning": "still bad"})
+
+    with patch("claude_settings.anthropic.Anthropic") as MockClient:
+        MockClient.return_value.messages.create.return_value = _make_mock_response(bad_resp)
+        result = refine_field_mapping(
+            FIELD_MAPPING_PROFILE, FIELD_MAPPING_SETTINGS,
+            reasoning_log=tmp_path / "log.jsonl",
+        )
+    assert result is None
+
+def test_refine_field_mapping_logs_reasoning(tmp_path):
+    """Reasoning is logged to the JSONL file."""
+    good_delta = {"data": {"load": {"cama_master": {"load": {"sale_price": "price"}}}}}
+    response = json.dumps({"settings": good_delta, "reasoning": "Mapped price to sale_price."})
+    log_path = tmp_path / "log.jsonl"
+
+    with patch("claude_settings.anthropic.Anthropic") as MockClient:
+        MockClient.return_value.messages.create.return_value = _make_mock_response(response)
+        refine_field_mapping(
+            FIELD_MAPPING_PROFILE, FIELD_MAPPING_SETTINGS,
+            reasoning_log=log_path,
+        )
+    content = log_path.read_text()
+    assert "refine_field_mapping" in content
+    assert "Mapped price" in content
