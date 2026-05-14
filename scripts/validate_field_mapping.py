@@ -69,6 +69,10 @@ def _extract_calc_fields(expr) -> set:
 CRITICAL_FIELDS = {"key", "sale_price", "sale_date", "class"}
 IMPORTANT_FIELDS = {"valid_sale", "vacant_sale", "he_id"}
 
+# Sales qualification distribution thresholds
+VALID_SALE_LOW_THRESHOLD = 0.05    # <5% valid → warning
+VALID_SALE_HIGH_THRESHOLD = 0.95   # >95% valid → warning
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -182,5 +186,115 @@ def validate_field_mapping(settings: dict, data_profile: dict) -> dict:
                     )
             # This calc's output is now available for subsequent calcs
             available_in_source.add(calc_name)
+
+    return {"errors": errors, "warnings": warnings}
+
+
+def validate_sales_qualification(df) -> dict:
+    """
+    Validate sales qualification flags in the assembled DataFrame.
+
+    Checks the actual distributions of valid_sale and vacant_sale after
+    assembly. Catastrophic conditions (zero valid sales, zero sale rows)
+    produce errors that block the pipeline. Suspicious distributions
+    produce warnings.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The assembled "sup" DataFrame containing all parcels with their
+        mapped and calculated fields. Must have a 'sale_price' column.
+
+    Returns
+    -------
+    dict
+        {"errors": [...], "warnings": [...]} where each entry is a
+        human-readable string.
+    """
+    errors = []
+    warnings = []
+
+    # Identify sale rows: non-null sale_price
+    if "sale_price" not in df.columns:
+        errors.append("Column 'sale_price' not found in assembled DataFrame")
+        return {"errors": errors, "warnings": warnings}
+
+    sale_mask = df["sale_price"].notna()
+    n_sales = int(sale_mask.sum())
+
+    # ------------------------------------------------------------------
+    # Check 1: No sale rows
+    # ------------------------------------------------------------------
+    if n_sales == 0:
+        errors.append(
+            "No sales found in assembled data (all sale_price values are "
+            "null). Modeling requires sale rows to train on."
+        )
+        return {"errors": errors, "warnings": warnings}
+
+    # ------------------------------------------------------------------
+    # Check 2: valid_sale column existence
+    # ------------------------------------------------------------------
+    has_valid_sale = "valid_sale" in df.columns
+    if not has_valid_sale:
+        warnings.append(
+            "Column 'valid_sale' not found in assembled DataFrame. "
+            "All sales will be treated as valid."
+        )
+
+    # ------------------------------------------------------------------
+    # Check 3: vacant_sale column existence
+    # ------------------------------------------------------------------
+    has_vacant_sale = "vacant_sale" in df.columns
+    if not has_vacant_sale:
+        warnings.append(
+            "Column 'vacant_sale' not found in assembled DataFrame. "
+            "Land model will have no vacant sale indicators."
+        )
+
+    # ------------------------------------------------------------------
+    # Checks 4-6: valid_sale distribution
+    # ------------------------------------------------------------------
+    if has_valid_sale:
+        valid_among_sales = df.loc[sale_mask, "valid_sale"].astype("boolean").fillna(False).astype(bool)
+        n_valid = int(valid_among_sales.sum())
+        valid_rate = n_valid / n_sales
+
+        # Check 4: Zero valid sales
+        if n_valid == 0:
+            errors.append(
+                f"No valid sales found: 0 of {n_sales} sale rows have "
+                f"valid_sale == True. Modeling will have zero training rows."
+            )
+        else:
+            # Check 5: Filter too restrictive (only if >0%)
+            if valid_rate < VALID_SALE_LOW_THRESHOLD:
+                pct = f"{valid_rate:.1%}"
+                warnings.append(
+                    f"Sales filter may be too restrictive: only {pct} of "
+                    f"{n_sales} sales are marked valid ({n_valid} rows)."
+                )
+
+            # Check 6: Filter too loose
+            if valid_rate > VALID_SALE_HIGH_THRESHOLD:
+                pct = f"{valid_rate:.1%}"
+                warnings.append(
+                    f"Sales filter may be too loose: {pct} of {n_sales} "
+                    f"sales are marked valid ({n_valid} rows). The filter "
+                    f"may not be excluding non-arm's-length transactions."
+                )
+
+    # ------------------------------------------------------------------
+    # Check 7: No vacant sales
+    # ------------------------------------------------------------------
+    if has_vacant_sale:
+        vacant_among_sales = df.loc[sale_mask, "vacant_sale"].astype("boolean").fillna(False).astype(bool)
+        n_vacant = int(vacant_among_sales.sum())
+
+        if n_vacant == 0:
+            warnings.append(
+                f"No vacant sales found: 0 of {n_sales} sale rows have "
+                f"vacant_sale == True. Land model will have no training data."
+            )
 
     return {"errors": errors, "warnings": warnings}
