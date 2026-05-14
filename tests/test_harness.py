@@ -119,6 +119,140 @@ def test_read_metrics_no_models_returns_empty(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Assessor metrics reading
+# ---------------------------------------------------------------------------
+
+def test_read_assessor_metrics_returns_dict(tmp_path):
+    """Happy path: pred_sales.parquet with assr_ratio column returns metrics."""
+    group_dir = tmp_path / "out" / "models" / "res" / "main" / "ensemble"
+    group_dir.mkdir(parents=True)
+    df = pd.DataFrame({"assr_ratio": [0.36, 0.40, 0.38, 0.42, 0.35]})
+    df.to_parquet(group_dir / "pred_sales.parquet", index=False)
+
+    metrics = harness._read_assessor_metrics(tmp_path)
+    assert "res" in metrics
+    assert "median_ratio" in metrics["res"]
+    assert "cod" in metrics["res"]
+    assert "count" in metrics["res"]
+    assert metrics["res"]["count"] == 5
+
+
+def test_read_assessor_metrics_cod_formula(tmp_path):
+    """COD = mean of absolute deviations from median / median x 100."""
+    group_dir = tmp_path / "out" / "models" / "res" / "main" / "ensemble"
+    group_dir.mkdir(parents=True)
+    # Ratios: [0.80, 1.00, 1.00, 1.00, 1.20] -> median=1.00
+    # Absolute deviations: [0.20, 0.00, 0.00, 0.00, 0.20]
+    # Mean of deviations: 0.08
+    # COD = 0.08 / 1.00 * 100 = 8.0
+    df = pd.DataFrame({"assr_ratio": [0.80, 1.00, 1.00, 1.00, 1.20]})
+    df.to_parquet(group_dir / "pred_sales.parquet", index=False)
+
+    metrics = harness._read_assessor_metrics(tmp_path)
+    assert metrics["res"]["cod"] == pytest.approx(8.0, abs=0.1)
+
+
+def test_read_assessor_metrics_missing_column(tmp_path):
+    """pred_sales.parquet without assr_ratio column returns empty dict for group."""
+    group_dir = tmp_path / "out" / "models" / "res" / "main" / "ensemble"
+    group_dir.mkdir(parents=True)
+    df = pd.DataFrame({"prediction_ratio": [1.0, 1.1]})
+    df.to_parquet(group_dir / "pred_sales.parquet", index=False)
+
+    metrics = harness._read_assessor_metrics(tmp_path)
+    assert metrics == {}
+
+
+def test_read_assessor_metrics_no_models_dir(tmp_path):
+    """No models directory returns empty dict."""
+    metrics = harness._read_assessor_metrics(tmp_path)
+    assert metrics == {}
+
+
+def test_read_assessor_metrics_multiple_groups(tmp_path):
+    """Multiple model groups each get their own metrics."""
+    for group_name in ["res", "com"]:
+        group_dir = tmp_path / "out" / "models" / group_name / "main" / "ensemble"
+        group_dir.mkdir(parents=True)
+        df = pd.DataFrame({"assr_ratio": [0.90, 1.00, 1.10]})
+        df.to_parquet(group_dir / "pred_sales.parquet", index=False)
+
+    metrics = harness._read_assessor_metrics(tmp_path)
+    assert "res" in metrics
+    assert "com" in metrics
+    assert metrics["res"]["count"] == 3
+    assert metrics["com"]["count"] == 3
+
+
+def test_read_assessor_metrics_all_nan(tmp_path):
+    """All-NaN assr_ratio column is skipped (returns empty for that group)."""
+    group_dir = tmp_path / "out" / "models" / "res" / "main" / "ensemble"
+    group_dir.mkdir(parents=True)
+    df = pd.DataFrame({"assr_ratio": [float("nan"), float("nan")]})
+    df.to_parquet(group_dir / "pred_sales.parquet", index=False)
+
+    metrics = harness._read_assessor_metrics(tmp_path)
+    assert metrics == {}
+
+
+# ---------------------------------------------------------------------------
+# Baseline comparison output
+# ---------------------------------------------------------------------------
+
+def test_print_baseline_comparison_table(capsys):
+    """Both metrics populated prints formatted comparison table."""
+    model_metrics = {
+        "res": {"median_ratio": 1.01, "cod": 12.10, "count": 500},
+        "com": {"median_ratio": 0.98, "cod": 18.50, "count": 100},
+    }
+    assessor_metrics = {
+        "res": {"median_ratio": 0.36, "cod": 40.00, "count": 500},
+        "com": {"median_ratio": 0.42, "cod": 32.10, "count": 100},
+    }
+
+    harness._print_baseline_comparison(model_metrics, assessor_metrics)
+
+    captured = capsys.readouterr()
+    assert "ASSESSOR BASELINE COMPARISON" in captured.out
+    assert "res" in captured.out
+    assert "com" in captured.out
+    assert "40.00" in captured.out   # assessor COD for res
+    assert "12.10" in captured.out   # model COD for res
+    assert "0.3600" in captured.out  # assessor ratio for res
+    assert "1.0100" in captured.out  # model ratio for res
+
+
+def test_print_baseline_comparison_skips_unmatched_groups(capsys):
+    """Groups only in one dict are silently skipped."""
+    model_metrics = {
+        "res": {"median_ratio": 1.00, "cod": 10.0, "count": 500},
+        "ind": {"median_ratio": 1.05, "cod": 15.0, "count": 50},
+    }
+    assessor_metrics = {
+        "res": {"median_ratio": 0.40, "cod": 35.0, "count": 500},
+        "ag":  {"median_ratio": 0.50, "cod": 45.0, "count": 30},
+    }
+
+    harness._print_baseline_comparison(model_metrics, assessor_metrics)
+
+    captured = capsys.readouterr()
+    assert "res" in captured.out
+    assert "ind" not in captured.out
+    assert "ag" not in captured.out
+
+
+def test_print_baseline_comparison_no_common_groups(capsys):
+    """No overlapping groups prints nothing."""
+    model_metrics = {"res": {"median_ratio": 1.00, "cod": 10.0, "count": 500}}
+    assessor_metrics = {"com": {"median_ratio": 0.40, "cod": 35.0, "count": 100}}
+
+    harness._print_baseline_comparison(model_metrics, assessor_metrics)
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+
+
+# ---------------------------------------------------------------------------
 # _merge_settings
 # ---------------------------------------------------------------------------
 
