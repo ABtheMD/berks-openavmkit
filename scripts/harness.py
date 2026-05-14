@@ -45,6 +45,9 @@ _NOTEBOOKS_PIPELINE = _REPO_ROOT / "notebooks" / "pipeline"
 _SCRIPTS_DIR = _REPO_ROOT / "scripts"
 _SEEDS_DIR = _REPO_ROOT / "seeds"
 
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+
 STAGES = {
     "download":  _SCRIPTS_DIR / "download_data.py",
     "configure": None,
@@ -372,7 +375,6 @@ def run_configure(locality: str, verbose: bool):
         print(f"[harness] generate_settings failed (exit {rc})", file=sys.stderr)
         raise SystemExit(rc)
 
-    sys.path.insert(0, str(_SCRIPTS_DIR))
     from profile_data import build_data_profile
     from claude_settings import generate_initial, refine_field_mapping, ClaudeParseError
     from validate_field_mapping import validate_field_mapping
@@ -445,7 +447,6 @@ def run_assemble(locality: str, verbose: bool):
         raise SystemExit(rc)
 
     # --- Post-assembly sales qualification validation ---
-    sys.path.insert(0, str(_SCRIPTS_DIR))
     from validate_field_mapping import validate_sales_qualification
 
     data_dir = _locality_data_dir(locality)
@@ -489,7 +490,6 @@ def run_clean(locality: str, verbose: bool):
 
 def run_model(locality: str, iteration_count: int, verbose: bool):
     print(f"[harness] === MODEL (up to {iteration_count} iterations) ===")
-    sys.path.insert(0, str(_SCRIPTS_DIR))
     from claude_settings import refine_after_model, ClaudeParseError
     from profile_data import build_data_profile
 
