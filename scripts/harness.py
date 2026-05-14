@@ -17,6 +17,7 @@ Options:
 import argparse
 import json
 import os
+import pickle
 import sys
 import subprocess
 from pathlib import Path
@@ -29,6 +30,10 @@ import pandas as pd
 
 class FieldMappingError(Exception):
     """Raised when field mappings cannot be resolved after Claude refinement."""
+
+
+class SalesQualificationError(Exception):
+    """Raised when post-assembly sales qualification validation finds errors."""
 
 
 # ---------------------------------------------------------------------------
@@ -438,6 +443,40 @@ def run_assemble(locality: str, verbose: bool):
     if rc != 0:
         print(f"[harness] assemble failed (exit {rc}). Re-run with --from assemble.", file=sys.stderr)
         raise SystemExit(rc)
+
+    # --- Post-assembly sales qualification validation ---
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+    from validate_field_mapping import validate_sales_qualification
+
+    data_dir = _locality_data_dir(locality)
+    pickle_path = data_dir / "out" / "1-assemble-sup.pickle"
+
+    if pickle_path.exists():
+        with open(pickle_path, "rb") as f:
+            sales_univ_pair = pickle.load(f)
+        # Support both plain (sales_df, univ_df) tuples and SalesUniversePair dataclass
+        if hasattr(sales_univ_pair, "universe"):
+            univ_df = sales_univ_pair.universe
+        else:
+            _, univ_df = sales_univ_pair
+
+        sq_result = validate_sales_qualification(univ_df)
+
+        for w in sq_result["warnings"]:
+            print(f"[harness] WARNING: {w}")
+
+        if sq_result["errors"]:
+            for e in sq_result["errors"]:
+                print(f"[harness] ERROR: {e}", file=sys.stderr)
+            raise SalesQualificationError(
+                f"Sales qualification validation failed:\n"
+                + "\n".join(f"  - {e}" for e in sq_result["errors"])
+            )
+
+        print(f"[harness] Sales qualification checks passed.")
+    else:
+        print(f"[harness] WARNING: Assembled pickle not found at {pickle_path}. "
+              f"Skipping sales qualification validation.")
 
 
 def run_clean(locality: str, verbose: bool):

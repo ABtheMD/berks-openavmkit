@@ -605,3 +605,92 @@ def test_configure_raises_field_mapping_error_when_unfixable(monkeypatch, tmp_pa
 
     with pytest.raises(harness.FieldMappingError):
         harness.run_configure(locality, verbose=False)
+
+
+# ---------------------------------------------------------------------------
+# Sales qualification validation in run_assemble
+# ---------------------------------------------------------------------------
+
+def test_sales_qualification_error_exists():
+    """SalesQualificationError is importable from harness."""
+    assert hasattr(harness, "SalesQualificationError")
+    assert issubclass(harness.SalesQualificationError, Exception)
+
+
+def test_assemble_raises_sales_qualification_error(monkeypatch, tmp_path):
+    """run_assemble raises SalesQualificationError when validation returns errors."""
+    import pickle
+    locality = "test-sq-fail"
+
+    # Create a fake assembled pickle with zero valid sales
+    data_dir = tmp_path / "notebooks" / "pipeline" / "data" / locality
+    out_dir = data_dir / "out"
+    out_dir.mkdir(parents=True)
+
+    sales_df = pd.DataFrame({"sale_price": [100_000.0] * 10,
+                              "valid_sale": [False] * 10,
+                              "vacant_sale": [True] * 5 + [False] * 5})
+    univ_df = sales_df.copy()
+    with open(out_dir / "1-assemble-sup.pickle", "wb") as f:
+        pickle.dump((sales_df, univ_df), f)
+
+    # Mock subprocess to succeed
+    monkeypatch.setattr(harness, "_run_subprocess", lambda *a, **kw: 0)
+    monkeypatch.setattr(harness, "_locality_data_dir", lambda loc: data_dir)
+
+    with pytest.raises(harness.SalesQualificationError):
+        harness.run_assemble(locality, verbose=False)
+
+
+def test_assemble_warns_but_continues(monkeypatch, tmp_path, capsys):
+    """run_assemble logs warnings but does not raise when no errors."""
+    import pickle
+    locality = "test-sq-warn"
+
+    data_dir = tmp_path / "notebooks" / "pipeline" / "data" / locality
+    out_dir = data_dir / "out"
+    out_dir.mkdir(parents=True)
+
+    # 98% valid → warning (too loose), but not an error
+    sales_df = pd.DataFrame({"sale_price": [100_000.0] * 100,
+                              "valid_sale": [True] * 98 + [False] * 2,
+                              "vacant_sale": [True] * 20 + [False] * 80})
+    univ_df = sales_df.copy()
+    with open(out_dir / "1-assemble-sup.pickle", "wb") as f:
+        pickle.dump((sales_df, univ_df), f)
+
+    monkeypatch.setattr(harness, "_run_subprocess", lambda *a, **kw: 0)
+    monkeypatch.setattr(harness, "_locality_data_dir", lambda loc: data_dir)
+
+    # Should NOT raise
+    harness.run_assemble(locality, verbose=False)
+
+    captured = capsys.readouterr()
+    assert "WARNING" in captured.out or "warning" in captured.out.lower()
+
+
+def test_assemble_passes_clean_data(monkeypatch, tmp_path, capsys):
+    """run_assemble completes without warnings when data is healthy."""
+    import pickle
+    locality = "test-sq-clean"
+
+    data_dir = tmp_path / "notebooks" / "pipeline" / "data" / locality
+    out_dir = data_dir / "out"
+    out_dir.mkdir(parents=True)
+
+    # 50% valid, 20% vacant — healthy
+    sales_df = pd.DataFrame({"sale_price": [100_000.0] * 100,
+                              "valid_sale": [True] * 50 + [False] * 50,
+                              "vacant_sale": [True] * 20 + [False] * 80})
+    univ_df = sales_df.copy()
+    with open(out_dir / "1-assemble-sup.pickle", "wb") as f:
+        pickle.dump((sales_df, univ_df), f)
+
+    monkeypatch.setattr(harness, "_run_subprocess", lambda *a, **kw: 0)
+    monkeypatch.setattr(harness, "_locality_data_dir", lambda loc: data_dir)
+
+    # Should NOT raise
+    harness.run_assemble(locality, verbose=False)
+
+    captured = capsys.readouterr()
+    assert "Sales qualification" in captured.out or "valid" in captured.out.lower()

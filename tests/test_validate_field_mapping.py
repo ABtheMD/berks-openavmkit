@@ -404,3 +404,159 @@ def test_validate_no_column_profiles():
     result = validate_field_mapping(COMPLETE_SETTINGS, profile)
     source_errors = [e for e in result["errors"] if "does not exist" in e]
     assert source_errors == []
+
+
+# ---------------------------------------------------------------------------
+# validate_sales_qualification
+# ---------------------------------------------------------------------------
+
+import pandas as pd
+from validate_field_mapping import (
+    validate_sales_qualification,
+    VALID_SALE_LOW_THRESHOLD,
+    VALID_SALE_HIGH_THRESHOLD,
+)
+
+
+def _make_sales_df(n_sales, valid_rate=0.5, vacant_rate=0.2, n_non_sale=10,
+                   include_valid_sale=True, include_vacant_sale=True):
+    """Helper: build a DataFrame with sale rows and non-sale rows."""
+    n_valid = int(n_sales * valid_rate)
+    n_vacant = int(n_sales * vacant_rate)
+
+    sale_prices = [100_000.0] * n_sales + [float("nan")] * n_non_sale
+    rows = {"sale_price": sale_prices}
+
+    if include_valid_sale:
+        valid_flags = [True] * n_valid + [False] * (n_sales - n_valid) + [float("nan")] * n_non_sale
+        rows["valid_sale"] = valid_flags
+
+    if include_vacant_sale:
+        vacant_flags = [True] * n_vacant + [False] * (n_sales - n_vacant) + [float("nan")] * n_non_sale
+        rows["vacant_sale"] = vacant_flags
+
+    return pd.DataFrame(rows)
+
+
+# -- Check 1: No sale rows --
+
+def test_sq_no_sale_rows_all_nan():
+    """All sale_price values are NaN — error."""
+    df = pd.DataFrame({"sale_price": [float("nan")] * 10,
+                        "valid_sale": [True] * 10,
+                        "vacant_sale": [False] * 10})
+    result = validate_sales_qualification(df)
+    assert any("no sale" in e.lower() or "no sales" in e.lower() for e in result["errors"])
+
+
+def test_sq_empty_dataframe():
+    """Empty DataFrame — error (no sale rows)."""
+    df = pd.DataFrame({"sale_price": pd.Series(dtype="float"),
+                        "valid_sale": pd.Series(dtype="bool"),
+                        "vacant_sale": pd.Series(dtype="bool")})
+    result = validate_sales_qualification(df)
+    assert len(result["errors"]) >= 1
+
+
+# -- Check 2 & 3: Column existence --
+
+def test_sq_valid_sale_missing():
+    """valid_sale column missing — warning."""
+    df = pd.DataFrame({"sale_price": [100_000.0] * 10,
+                        "vacant_sale": [True] * 5 + [False] * 5})
+    result = validate_sales_qualification(df)
+    assert any("valid_sale" in w for w in result["warnings"])
+    # Should NOT error for missing column
+    assert not any("valid_sale" in e for e in result["errors"])
+
+
+def test_sq_vacant_sale_missing():
+    """vacant_sale column missing — warning."""
+    df = pd.DataFrame({"sale_price": [100_000.0] * 10,
+                        "valid_sale": [True] * 5 + [False] * 5})
+    result = validate_sales_qualification(df)
+    assert any("vacant_sale" in w for w in result["warnings"])
+
+
+# -- Check 4: Zero valid sales --
+
+def test_sq_zero_valid_sales():
+    """All valid_sale == False among sale rows — error."""
+    df = _make_sales_df(100, valid_rate=0.0, vacant_rate=0.2)
+    result = validate_sales_qualification(df)
+    assert any("0%" in e or "zero" in e.lower() or "no valid" in e.lower() for e in result["errors"])
+
+
+def test_sq_valid_sale_all_nan():
+    """valid_sale column exists but all NaN among sale rows — treated as 0% — error."""
+    df = pd.DataFrame({"sale_price": [100_000.0] * 20,
+                        "valid_sale": [float("nan")] * 20,
+                        "vacant_sale": [True] * 10 + [False] * 10})
+    result = validate_sales_qualification(df)
+    assert any("0%" in e or "zero" in e.lower() or "no valid" in e.lower() for e in result["errors"])
+
+
+# -- Check 5: Filter too restrictive --
+
+def test_sq_filter_too_restrictive():
+    """3% valid sales — warning."""
+    df = _make_sales_df(100, valid_rate=0.03, vacant_rate=0.2)
+    result = validate_sales_qualification(df)
+    assert any("restrictive" in w.lower() or "low" in w.lower() or "3" in w for w in result["warnings"])
+    # Should NOT be an error (it's >0%)
+    assert result["errors"] == []
+
+
+# -- Check 6: Filter too loose --
+
+def test_sq_filter_too_loose():
+    """98% valid sales — warning."""
+    df = _make_sales_df(100, valid_rate=0.98, vacant_rate=0.2)
+    result = validate_sales_qualification(df)
+    assert any("loose" in w.lower() or "high" in w.lower() or "98" in w for w in result["warnings"])
+
+
+# -- Check 7: No vacant sales --
+
+def test_sq_no_vacant_sales():
+    """All vacant_sale == False — warning."""
+    df = _make_sales_df(100, valid_rate=0.5, vacant_rate=0.0)
+    result = validate_sales_qualification(df)
+    assert any("vacant" in w.lower() for w in result["warnings"])
+
+
+# -- Happy path --
+
+def test_sq_happy_path():
+    """50% valid, 20% vacant — no errors, no warnings."""
+    df = _make_sales_df(100, valid_rate=0.5, vacant_rate=0.2)
+    result = validate_sales_qualification(df)
+    assert result["errors"] == []
+    assert result["warnings"] == []
+
+
+# -- Threshold boundaries --
+
+def test_sq_exactly_5_percent_no_warning():
+    """Exactly 5% valid — no warning (threshold is strict less-than)."""
+    df = _make_sales_df(100, valid_rate=0.05, vacant_rate=0.2)
+    result = validate_sales_qualification(df)
+    restrictive_warnings = [w for w in result["warnings"] if "restrictive" in w.lower() or "low" in w.lower()]
+    assert restrictive_warnings == []
+    assert result["errors"] == []
+
+
+def test_sq_exactly_95_percent_no_warning():
+    """Exactly 95% valid — no warning (threshold is strict greater-than)."""
+    df = _make_sales_df(100, valid_rate=0.95, vacant_rate=0.2)
+    result = validate_sales_qualification(df)
+    loose_warnings = [w for w in result["warnings"] if "loose" in w.lower() or "high" in w.lower()]
+    assert loose_warnings == []
+
+
+# -- Constants --
+
+def test_sq_thresholds_exist():
+    """Threshold constants are importable and have expected values."""
+    assert VALID_SALE_LOW_THRESHOLD == 0.05
+    assert VALID_SALE_HIGH_THRESHOLD == 0.95
