@@ -60,3 +60,127 @@ def _extract_calc_fields(expr) -> set:
         return fields
 
     return set()
+
+
+# ---------------------------------------------------------------------------
+# Field registries
+# ---------------------------------------------------------------------------
+
+CRITICAL_FIELDS = {"key", "sale_price", "sale_date", "class"}
+IMPORTANT_FIELDS = {"valid_sale", "vacant_sale", "he_id"}
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+def validate_field_mapping(settings: dict, data_profile: dict) -> dict:
+    """
+    Validate field mappings in settings against the data profile.
+
+    Runs three checks:
+      1. Critical field completeness — are required fields mapped or calculated?
+      2. Source column existence — do mapped source columns exist in parquet files?
+      3. Calc dependency resolution — do calc expressions reference available fields?
+
+    Returns {"errors": [...], "warnings": [...]} where each entry is a
+    human-readable string. Errors should block the pipeline; warnings are
+    informational.
+    """
+    errors = []
+    warnings = []
+
+    data_load = settings.get("data", {}).get("load", {})
+    column_profiles = data_profile.get("column_profiles", {})
+
+    # Collect all mapped canonical field names and calc-defined names
+    all_mapped_fields = set()
+    all_calc_fields = set()
+    for source_handle, source_cfg in data_load.items():
+        if not isinstance(source_cfg, dict):
+            continue
+        load_map = source_cfg.get("load", {})
+        for canonical_name in load_map:
+            all_mapped_fields.add(canonical_name)
+        calc_map = source_cfg.get("calc", {})
+        for calc_name in calc_map:
+            all_calc_fields.add(calc_name)
+
+    all_available = all_mapped_fields | all_calc_fields
+
+    # ==================================================================
+    # Check 1: Critical field completeness
+    # ==================================================================
+
+    for field in sorted(CRITICAL_FIELDS):
+        if field not in all_available:
+            errors.append(
+                f"Missing critical field '{field}': not mapped in any "
+                f"source's load or calc section"
+            )
+
+    for field in sorted(IMPORTANT_FIELDS):
+        if field not in all_available:
+            warnings.append(
+                f"Missing important field '{field}': not mapped in any "
+                f"source's load or calc section"
+            )
+
+    # ==================================================================
+    # Check 2: Source column existence
+    # ==================================================================
+
+    if column_profiles:
+        for source_handle, source_cfg in data_load.items():
+            if not isinstance(source_cfg, dict):
+                continue
+            source_columns = column_profiles.get(source_handle, None)
+            if source_columns is None:
+                # Source not in column_profiles — skip (maybe not downloaded yet)
+                continue
+
+            load_map = source_cfg.get("load", {})
+            for canonical_name, source_ref in load_map.items():
+                # Extract the source column name
+                if isinstance(source_ref, list):
+                    # Complex mapping: [column, dtype, format]
+                    source_col = source_ref[0] if len(source_ref) >= 1 else None
+                elif isinstance(source_ref, str):
+                    source_col = source_ref
+                else:
+                    continue
+
+                if source_col and source_col not in source_columns:
+                    errors.append(
+                        f"Source column '{source_col}' does not exist in "
+                        f"'{source_handle}' (mapped as '{canonical_name}')"
+                    )
+
+    # ==================================================================
+    # Check 3: Calc dependency resolution
+    # ==================================================================
+
+    for source_handle, source_cfg in data_load.items():
+        if not isinstance(source_cfg, dict):
+            continue
+        load_map = source_cfg.get("load", {})
+        calc_map = source_cfg.get("calc", {})
+        if not calc_map:
+            continue
+
+        # Fields available in this source: load keys + prior calc keys
+        available_in_source = set(load_map.keys())
+
+        for calc_name, calc_expr in calc_map.items():
+            referenced = _extract_calc_fields(calc_expr)
+            for ref in sorted(referenced):
+                if ref not in available_in_source:
+                    warnings.append(
+                        f"Unresolved calc dependency in '{source_handle}': "
+                        f"calc '{calc_name}' references '{ref}' which is not "
+                        f"in load or a prior calc"
+                    )
+            # This calc's output is now available for subsequent calcs
+            available_in_source.add(calc_name)
+
+    return {"errors": errors, "warnings": warnings}
