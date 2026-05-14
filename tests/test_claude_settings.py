@@ -531,3 +531,92 @@ def test_validate_valid_delta_passes_unchanged():
     result = validate_settings_delta(delta, VALIDATION_PROFILE)
     assert result["violations"] == []
     assert result["cleaned"] == delta
+
+
+# ---------------------------------------------------------------------------
+# validate_settings_delta — Rule 7: Empty model_groups warning
+# ---------------------------------------------------------------------------
+
+def test_validate_rule7_all_groups_skipped_warns():
+    """All groups being skipped should produce a warning but not strip."""
+    delta = {
+        "modeling": {
+            "model_groups": {
+                "res": {
+                    "name": "Residential",
+                    "filter": ["==", "class", "R"],
+                    "skip": ["all"],
+                },
+                "com": {
+                    "name": "Commercial",
+                    "filter": ["==", "class", "C"],
+                    "skip": ["all"],
+                },
+            }
+        }
+    }
+    result = validate_settings_delta(delta, VALIDATION_PROFILE)
+    # Groups should still be present (warning only, not stripped)
+    assert "res" in result["cleaned"]["modeling"]["model_groups"]
+    assert "com" in result["cleaned"]["modeling"]["model_groups"]
+    assert any("no active" in v.lower() or "all" in v.lower() for v in result["violations"])
+
+def test_validate_rule7_some_groups_active_no_warning():
+    """If at least one group is active, no empty-groups warning."""
+    delta = {
+        "modeling": {
+            "model_groups": {
+                "res": {
+                    "name": "Residential",
+                    "filter": ["==", "class", "R"],
+                },
+                "com": {
+                    "name": "Commercial",
+                    "filter": ["==", "class", "C"],
+                    "skip": ["all"],
+                },
+            }
+        }
+    }
+    result = validate_settings_delta(delta, VALIDATION_PROFILE)
+    warnings = [v for v in result["violations"] if "no active" in v.lower() or "all groups" in v.lower()]
+    assert warnings == []
+
+
+# ---------------------------------------------------------------------------
+# validate_settings_delta — Edge cases
+# ---------------------------------------------------------------------------
+
+def test_validate_multiple_violations_all_caught():
+    """A delta with multiple problems should report all violations."""
+    delta = {
+        "modeling": {
+            "model_groups": {
+                "res": {
+                    "name": "Residential",
+                    "filter": ["==", "class", "R"],
+                    "skip": "all",              # Rule 4: not a list
+                    "exclude_features": 42,      # Rule 5: not a list/number
+                },
+                "bad": "not a dict",             # Rule 3: not a dict
+            },
+            "models": {
+                "default": {"dep_vars": ["sale_price", "ghost_column"]}
+                                                 # Rule 2: ghost_column
+            },
+        }
+    }
+    result = validate_settings_delta(delta, VALIDATION_PROFILE)
+    assert len(result["violations"]) >= 3
+
+def test_validate_empty_delta():
+    """An empty delta should pass with no violations."""
+    result = validate_settings_delta({}, VALIDATION_PROFILE)
+    assert result["violations"] == []
+    assert result["cleaned"] == {}
+
+def test_validate_no_modeling_key():
+    """Delta without a modeling key should pass with no violations."""
+    delta = {"field_classification": {"important": {"school": "categorical"}}}
+    result = validate_settings_delta(delta, VALIDATION_PROFILE)
+    assert result["violations"] == []

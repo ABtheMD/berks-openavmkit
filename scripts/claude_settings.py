@@ -428,6 +428,22 @@ def validate_settings_delta(
                     )
                     del model_groups[group_key]
 
+    # ==================================================================
+    # WARNING RULES
+    # ==================================================================
+
+    # ── Rule 7: Empty model_groups warning ───────────────────────────
+    if model_groups:
+        active_groups = [
+            k for k, v in model_groups.items()
+            if isinstance(v, dict) and "all" not in v.get("skip", [])
+        ]
+        if not active_groups:
+            violations.append(
+                "Warning: all model_groups are skipped — no active groups "
+                "will be modeled"
+            )
+
     return {"cleaned": cleaned, "violations": violations}
 
 
