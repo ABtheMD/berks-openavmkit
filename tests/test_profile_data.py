@@ -6,7 +6,7 @@ import pytest
 
 # Add scripts/ to path so we can import profile_data directly
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
-from profile_data import build_data_profile, infer_jurisdiction_tier, _simplify_dtype
+from profile_data import build_data_profile, infer_jurisdiction_tier, _simplify_dtype, _profile_columns
 
 
 @pytest.fixture
@@ -61,12 +61,59 @@ def test_simplify_dtype_string_explicit():
 def test_simplify_dtype_datetime():
     assert _simplify_dtype(pd.Series(pd.to_datetime(["2020-01-01"])).dtype) == "other"
 
+def test_profile_columns_returns_dict():
+    df = pd.DataFrame({"a": [1, 2, 3], "b": ["x", "y", "z"]})
+    result = _profile_columns(df)
+    assert isinstance(result, dict)
+    assert "a" in result
+    assert "b" in result
+
+def test_profile_columns_dtype():
+    df = pd.DataFrame({"price": [100.0, 200.0], "name": ["a", "b"]})
+    result = _profile_columns(df)
+    assert result["price"]["dtype"] == "float"
+    assert result["name"]["dtype"] == "string"
+
+def test_profile_columns_non_null():
+    df = pd.DataFrame({"a": [1, None, 3]})
+    result = _profile_columns(df)
+    assert result["a"]["non_null"] == 2
+
+def test_profile_columns_unique():
+    df = pd.DataFrame({"a": [1, 1, 2, 3]})
+    result = _profile_columns(df)
+    assert result["a"]["unique"] == 3
+
+def test_profile_has_column_profiles_not_available_columns(tmp_locality):
+    profile = build_data_profile("fake-county", data_base_dir=tmp_locality)
+    assert "column_profiles" in profile
+    assert "available_columns" not in profile
+
+def test_profile_column_profiles_has_source_files(tmp_locality):
+    profile = build_data_profile("fake-county", data_base_dir=tmp_locality)
+    assert "cama_master" in profile["column_profiles"]
+    assert "geo_parcels" in profile["column_profiles"]
+
+def test_profile_column_profiles_master_columns(tmp_locality):
+    profile = build_data_profile("fake-county", data_base_dir=tmp_locality)
+    master = profile["column_profiles"]["cama_master"]
+    assert "key" in master
+    assert "sale_price" in master
+    assert master["key"]["dtype"] == "string"
+
+def test_profile_column_profiles_geo_columns(tmp_locality):
+    profile = build_data_profile("fake-county", data_base_dir=tmp_locality)
+    geo = profile["column_profiles"]["geo_parcels"]
+    assert "lat" in geo
+    assert geo["lat"]["dtype"] == "int"
+
+
 def test_profile_returns_required_keys(tmp_locality):
     profile = build_data_profile("fake-county", data_base_dir=tmp_locality)
     for key in [
         "locality", "total_parcels", "total_sales", "annual_sales_volume",
         "class_distribution", "he_id_fill_rate_by_class",
-        "has_spatial_data", "available_columns", "jurisdiction_tier",
+        "has_spatial_data", "column_profiles", "jurisdiction_tier",
     ]:
         assert key in profile, f"Missing key: {key}"
 
