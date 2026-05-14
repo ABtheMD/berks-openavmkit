@@ -6,7 +6,7 @@ import pytest
 
 # Add scripts/ to path so we can import profile_data directly
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
-from profile_data import build_data_profile, infer_jurisdiction_tier
+from profile_data import build_data_profile, infer_jurisdiction_tier, _simplify_dtype
 
 
 @pytest.fixture
@@ -41,6 +41,25 @@ def test_tier_large_to_mid():
 
 def test_tier_rural_small():
     assert infer_jurisdiction_tier(20_000, 1_000) == "rural_small"
+
+
+def test_simplify_dtype_int():
+    assert _simplify_dtype(pd.Series([1, 2, 3]).dtype) == "int"
+
+def test_simplify_dtype_float():
+    assert _simplify_dtype(pd.Series([1.0, 2.5]).dtype) == "float"
+
+def test_simplify_dtype_bool():
+    assert _simplify_dtype(pd.Series([True, False]).dtype) == "bool"
+
+def test_simplify_dtype_string_object():
+    assert _simplify_dtype(pd.Series(["a", "b"]).dtype) == "string"
+
+def test_simplify_dtype_string_explicit():
+    assert _simplify_dtype(pd.StringDtype()) == "string"
+
+def test_simplify_dtype_datetime():
+    assert _simplify_dtype(pd.Series(pd.to_datetime(["2020-01-01"])).dtype) == "other"
 
 def test_profile_returns_required_keys(tmp_locality):
     profile = build_data_profile("fake-county", data_base_dir=tmp_locality)

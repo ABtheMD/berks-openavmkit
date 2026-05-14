@@ -14,6 +14,20 @@ _REPO_ROOT = Path(__file__).parent.parent
 DATA_BASE_DIR = _REPO_ROOT / "notebooks" / "pipeline" / "data"
 
 
+def _simplify_dtype(dtype) -> str:
+    """Map a pandas/numpy dtype to a simplified category string."""
+    name = str(dtype).lower()
+    if "int" in name:
+        return "int"
+    if "float" in name:
+        return "float"
+    if name in ("bool", "boolean"):
+        return "bool"
+    if name in ("object", "string") or "string" in name:
+        return "string"
+    return "other"
+
+
 def build_data_profile(locality_slug: str, data_base_dir: Path = None) -> dict:
     if data_base_dir is None:
         data_base_dir = DATA_BASE_DIR
