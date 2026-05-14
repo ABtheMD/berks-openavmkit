@@ -429,8 +429,13 @@ def run_model(locality: str, iteration_count: int, verbose: bool):
             _SCRIPTS_DIR / "_run_model.py", locality, verbose,
         )
         if rc != 0:
-            print(f"[harness] model run {i + 1} failed (exit {rc}).", file=sys.stderr)
-            raise SystemExit(rc)
+            print(
+                f"[harness] WARNING: model run {i + 1} failed (exit {rc}). "
+                f"Reverting settings.",
+                file=sys.stderr,
+            )
+            _save_settings(locality, current_settings)
+            continue
 
         metrics = _read_model_metrics(data_dir)
         _save_metrics_snapshot(data_dir, i + 1, metrics)
