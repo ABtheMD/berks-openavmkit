@@ -17,6 +17,7 @@ Options:
 import argparse
 import json
 import os
+import pickle
 import sys
 import subprocess
 from pathlib import Path
@@ -444,7 +445,6 @@ def run_assemble(locality: str, verbose: bool):
         raise SystemExit(rc)
 
     # --- Post-assembly sales qualification validation ---
-    import pickle
     sys.path.insert(0, str(_SCRIPTS_DIR))
     from validate_field_mapping import validate_sales_qualification
 
