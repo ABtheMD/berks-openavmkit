@@ -305,3 +305,41 @@ def test_model_recovery_continues_after_subprocess_failure(monkeypatch, tmp_path
 
     # All 3 iterations should have been attempted
     assert call_count["n"] == 3
+
+
+def test_model_recovery_restores_settings_on_disk(monkeypatch, tmp_path):
+    """After a model subprocess failure, settings.json on disk should be
+    restored to the pre-iteration state."""
+    original_settings = {"modeling": {"model_groups": {"res": {"name": "Residential"}}}}
+
+    def fake_run_subprocess(script, locality, verbose, extra_args=None):
+        if "_run_model" in str(script):
+            # Simulate Claude having mutated settings.json before crash
+            settings_path.write_text(json.dumps({"modeling": {"CORRUPTED": True}}))
+            return 1  # crash
+        return 0
+
+    monkeypatch.setattr(harness, "_run_subprocess", fake_run_subprocess)
+
+    data_dir = tmp_path / "us-pa-berks"
+    data_dir.mkdir()
+    settings_path = data_dir / "in" / "settings.json"
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text(json.dumps(original_settings))
+
+    monkeypatch.setattr(harness, "_NOTEBOOKS_PIPELINE", tmp_path)
+    monkeypatch.setattr(harness, "_locality_data_dir", lambda loc: data_dir)
+    monkeypatch.setattr(harness, "_settings_path", lambda loc: settings_path)
+
+    monkeypatch.setattr(
+        "profile_data.build_data_profile",
+        lambda *a, **kw: {"jurisdiction_tier": "large_to_mid"},
+    )
+
+    # Run with 1 iteration — it will fail and recover
+    harness.run_model("us-pa-berks", iteration_count=1, verbose=False)
+
+    # Settings on disk should be restored to original
+    restored = json.loads(settings_path.read_text())
+    assert restored == original_settings
+    assert "CORRUPTED" not in str(restored)
