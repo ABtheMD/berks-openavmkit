@@ -11,6 +11,7 @@ from claude_settings import (
     generate_initial,
     refine_after_model,
     _extract_json_block,
+    validate_settings_delta,
 )
 
 # ---------------------------------------------------------------------------
@@ -64,6 +65,35 @@ SAMPLE_CURRENT_SETTINGS = {
             "default": {"dep_vars": ["bldg_area_finished_sqft"]},
         },
     }
+}
+
+
+VALIDATION_PROFILE = {
+    "locality": "us-pa-test",
+    "total_parcels": 5000,
+    "total_sales": 1000,
+    "annual_sales_volume": 500,
+    "class_distribution": {"R": {"parcels": 4000, "sales": 800}},
+    "he_id_fill_rate_by_class": {"R": 0.98},
+    "land_he_id_fill_rate_by_class": {"R": 0.97},
+    "has_spatial_data": True,
+    "column_profiles": {
+        "cama_master": {
+            "key": {"dtype": "string", "non_null": 5000, "unique": 5000},
+            "class": {"dtype": "string", "non_null": 5000, "unique": 5},
+            "sale_price": {"dtype": "float", "non_null": 3000, "unique": 2000},
+            "he_id": {"dtype": "int", "non_null": 4800, "unique": 1200},
+            "bldg_area": {"dtype": "float", "non_null": 4500, "unique": 3000},
+        },
+        "geo_parcels": {
+            "key": {"dtype": "string", "non_null": 5000, "unique": 5000},
+            "school": {"dtype": "string", "non_null": 5000, "unique": 15},
+            "municipalname": {"dtype": "string", "non_null": 5000, "unique": 30},
+            "acreage": {"dtype": "float", "non_null": 4900, "unique": 4000},
+            "lat": {"dtype": "float", "non_null": 5000, "unique": 4999},
+        },
+    },
+    "jurisdiction_tier": "large_to_mid",
 }
 
 
@@ -146,3 +176,604 @@ def test_refine_after_model_returns_dict(tmp_path):
             iteration=1, reasoning_log=tmp_path / "log.jsonl"
         )
     assert isinstance(result, dict)
+
+
+# ---------------------------------------------------------------------------
+# validate_settings_delta — Rule 3: model_groups structure
+# ---------------------------------------------------------------------------
+
+def test_validate_rule3_non_dict_group_removed():
+    """model_group entry that is not a dict should be removed."""
+    delta = {
+        "modeling": {
+            "model_groups": {
+                "res": "not a dict",
+                "com": {"name": "Commercial", "filter": ["==", "class", "C"]},
+            }
+        }
+    }
+    result = validate_settings_delta(delta, VALIDATION_PROFILE)
+    assert "res" not in result["cleaned"]["modeling"]["model_groups"]
+    assert "com" in result["cleaned"]["modeling"]["model_groups"]
+    assert any("res" in v for v in result["violations"])
+
+def test_validate_rule3_invalid_filter_operator():
+    """Filter with invalid operator should cause group removal."""
+    delta = {
+        "modeling": {
+            "model_groups": {
+                "res": {"name": "Residential", "filter": ["LIKE", "class", "R"]}
+            }
+        }
+    }
+    result = validate_settings_delta(delta, VALIDATION_PROFILE)
+    assert "res" not in result["cleaned"]["modeling"]["model_groups"]
+    assert any("LIKE" in v for v in result["violations"])
+
+def test_validate_rule3_filter_not_list():
+    """Filter that is not a list should cause group removal."""
+    delta = {
+        "modeling": {
+            "model_groups": {
+                "res": {"name": "Residential", "filter": "class == R"}
+            }
+        }
+    }
+    result = validate_settings_delta(delta, VALIDATION_PROFILE)
+    assert "res" not in result["cleaned"]["modeling"]["model_groups"]
+    assert any("filter" in v.lower() for v in result["violations"])
+
+def test_validate_rule3_group_without_filter_kept():
+    """A group dict without a filter key is valid (filter is optional)."""
+    delta = {
+        "modeling": {
+            "model_groups": {
+                "res": {"name": "Residential"}
+            }
+        }
+    }
+    result = validate_settings_delta(delta, VALIDATION_PROFILE)
+    assert "res" in result["cleaned"]["modeling"]["model_groups"]
+
+
+# ---------------------------------------------------------------------------
+# validate_settings_delta — Rule 4: skip values
+# ---------------------------------------------------------------------------
+
+def test_validate_rule4_invalid_skip_value_removed():
+    """Invalid skip values should be removed from the list."""
+    delta = {
+        "modeling": {
+            "model_groups": {
+                "res": {
+                    "name": "Residential",
+                    "filter": ["==", "class", "R"],
+                    "skip": ["all", "invalid_stage"],
+                }
+            }
+        }
+    }
+    result = validate_settings_delta(delta, VALIDATION_PROFILE)
+    skip = result["cleaned"]["modeling"]["model_groups"]["res"]["skip"]
+    assert skip == ["all"]
+    assert any("invalid_stage" in v for v in result["violations"])
+
+def test_validate_rule4_skip_not_list_removed():
+    """skip that is not a list should be removed."""
+    delta = {
+        "modeling": {
+            "model_groups": {
+                "res": {
+                    "name": "Residential",
+                    "filter": ["==", "class", "R"],
+                    "skip": "all",
+                }
+            }
+        }
+    }
+    result = validate_settings_delta(delta, VALIDATION_PROFILE)
+    assert "skip" not in result["cleaned"]["modeling"]["model_groups"]["res"]
+    assert any("skip" in v.lower() for v in result["violations"])
+
+def test_validate_rule4_valid_skip_unchanged():
+    """Valid skip values should pass through unchanged."""
+    delta = {
+        "modeling": {
+            "model_groups": {
+                "res": {
+                    "name": "Residential",
+                    "filter": ["==", "class", "R"],
+                    "skip": ["model", "report"],
+                }
+            }
+        }
+    }
+    result = validate_settings_delta(delta, VALIDATION_PROFILE)
+    skip = result["cleaned"]["modeling"]["model_groups"]["res"]["skip"]
+    assert skip == ["model", "report"]
+
+
+# ---------------------------------------------------------------------------
+# validate_settings_delta — Rule 5: exclude_features type
+# ---------------------------------------------------------------------------
+
+def test_validate_rule5_exclude_features_not_list():
+    """exclude_features that is not a list should be removed."""
+    delta = {
+        "modeling": {
+            "model_groups": {
+                "res": {
+                    "name": "Residential",
+                    "filter": ["==", "class", "R"],
+                    "exclude_features": "he_id",
+                }
+            }
+        }
+    }
+    result = validate_settings_delta(delta, VALIDATION_PROFILE)
+    group = result["cleaned"]["modeling"]["model_groups"]["res"]
+    assert not isinstance(group.get("exclude_features", []), str)
+    assert any("exclude_features" in v.lower() for v in result["violations"])
+
+def test_validate_rule5_non_string_elements_removed():
+    """Non-string elements in exclude_features should be removed."""
+    delta = {
+        "modeling": {
+            "model_groups": {
+                "res": {
+                    "name": "Residential",
+                    "filter": ["==", "class", "R"],
+                    "exclude_features": ["he_id", 42, True, "sale_price"],
+                }
+            }
+        }
+    }
+    result = validate_settings_delta(delta, VALIDATION_PROFILE)
+    exclude = result["cleaned"]["modeling"]["model_groups"]["res"]["exclude_features"]
+    assert 42 not in exclude
+    assert True not in exclude
+    assert "he_id" in exclude
+    assert any("exclude_features" in v.lower() for v in result["violations"])
+
+
+# ---------------------------------------------------------------------------
+# validate_settings_delta — Rule 6: dep_vars type
+# ---------------------------------------------------------------------------
+
+def test_validate_rule6_dep_vars_not_list():
+    """dep_vars that is not a list should be removed."""
+    delta = {
+        "modeling": {
+            "models": {
+                "default": {"dep_vars": "sale_price"}
+            }
+        }
+    }
+    result = validate_settings_delta(delta, VALIDATION_PROFILE)
+    model_cfg = result["cleaned"]["modeling"]["models"]["default"]
+    assert "dep_vars" not in model_cfg
+    assert any("dep_vars" in v.lower() for v in result["violations"])
+
+def test_validate_rule6_non_string_dep_var_removed():
+    """Non-string elements in dep_vars should be removed."""
+    delta = {
+        "modeling": {
+            "models": {
+                "default": {"dep_vars": ["sale_price", 42]}
+            }
+        }
+    }
+    result = validate_settings_delta(delta, VALIDATION_PROFILE)
+    dep_vars = result["cleaned"]["modeling"]["models"]["default"]["dep_vars"]
+    assert "sale_price" in dep_vars
+    assert 42 not in dep_vars
+
+
+# ---------------------------------------------------------------------------
+# validate_settings_delta — Rule 1: String features
+# ---------------------------------------------------------------------------
+
+def test_validate_rule1_string_dep_var_removed():
+    """String column in dep_vars should be removed."""
+    delta = {
+        "modeling": {
+            "models": {
+                "default": {"dep_vars": ["sale_price", "school"]}
+            }
+        }
+    }
+    result = validate_settings_delta(delta, VALIDATION_PROFILE)
+    dep_vars = result["cleaned"]["modeling"]["models"]["default"]["dep_vars"]
+    assert "school" not in dep_vars
+    assert "sale_price" in dep_vars
+    assert any("school" in v for v in result["violations"])
+
+def test_validate_rule1_string_columns_added_to_exclude():
+    """String columns not declared categorical should be added to exclude_features."""
+    delta = {
+        "modeling": {
+            "model_groups": {
+                "res": {"name": "Residential", "filter": ["==", "class", "R"]}
+            }
+        }
+    }
+    result = validate_settings_delta(delta, VALIDATION_PROFILE)
+    exclude = result["cleaned"]["modeling"]["model_groups"]["res"]["exclude_features"]
+    assert "school" in exclude
+    assert "municipalname" in exclude
+    assert len(result["violations"]) > 0
+
+def test_validate_rule1_categorical_not_excluded():
+    """String columns declared categorical in delta should NOT be excluded."""
+    delta = {
+        "field_classification": {
+            "important": {"school": "categorical"}
+        },
+        "modeling": {
+            "model_groups": {
+                "res": {"name": "Residential", "filter": ["==", "class", "R"]}
+            }
+        }
+    }
+    result = validate_settings_delta(delta, VALIDATION_PROFILE)
+    exclude = result["cleaned"]["modeling"]["model_groups"]["res"].get("exclude_features", [])
+    assert "school" not in exclude
+
+def test_validate_rule1_categorical_in_current_settings():
+    """String columns declared categorical in current_settings should NOT be excluded."""
+    delta = {
+        "modeling": {
+            "model_groups": {
+                "res": {"name": "Residential", "filter": ["==", "class", "R"]}
+            }
+        }
+    }
+    current = {
+        "field_classification": {
+            "important": {"school": "categorical", "municipalname": "categorical"}
+        }
+    }
+    result = validate_settings_delta(delta, VALIDATION_PROFILE, current_settings=current)
+    exclude = result["cleaned"]["modeling"]["model_groups"]["res"].get("exclude_features", [])
+    assert "school" not in exclude
+    assert "municipalname" not in exclude
+
+def test_validate_rule1_already_excluded_no_duplicate():
+    """String columns already in exclude_features should not be duplicated."""
+    delta = {
+        "modeling": {
+            "model_groups": {
+                "res": {
+                    "name": "Residential",
+                    "filter": ["==", "class", "R"],
+                    "exclude_features": ["school"],
+                }
+            }
+        }
+    }
+    result = validate_settings_delta(delta, VALIDATION_PROFILE)
+    exclude = result["cleaned"]["modeling"]["model_groups"]["res"]["exclude_features"]
+    assert exclude.count("school") == 1
+
+
+# ---------------------------------------------------------------------------
+# validate_settings_delta — Rule 2: Nonexistent columns
+# ---------------------------------------------------------------------------
+
+def test_validate_rule2_nonexistent_in_exclude_features():
+    """Nonexistent column in exclude_features should be removed."""
+    delta = {
+        "modeling": {
+            "model_groups": {
+                "res": {
+                    "name": "Residential",
+                    "filter": ["==", "class", "R"],
+                    "exclude_features": ["sale_price", "phantom_column"],
+                }
+            }
+        }
+    }
+    result = validate_settings_delta(delta, VALIDATION_PROFILE)
+    exclude = result["cleaned"]["modeling"]["model_groups"]["res"]["exclude_features"]
+    assert "phantom_column" not in exclude
+    assert "sale_price" in exclude
+    assert any("phantom_column" in v for v in result["violations"])
+
+def test_validate_rule2_nonexistent_dep_var():
+    """Nonexistent column in dep_vars should be removed."""
+    delta = {
+        "modeling": {
+            "models": {
+                "default": {"dep_vars": ["sale_price", "nonexistent_price"]}
+            }
+        }
+    }
+    result = validate_settings_delta(delta, VALIDATION_PROFILE)
+    dep_vars = result["cleaned"]["modeling"]["models"]["default"]["dep_vars"]
+    assert "nonexistent_price" not in dep_vars
+    assert "sale_price" in dep_vars
+    assert any("nonexistent_price" in v for v in result["violations"])
+
+def test_validate_rule2_nonexistent_in_filter():
+    """Nonexistent field in filter should cause group removal."""
+    delta = {
+        "modeling": {
+            "model_groups": {
+                "res": {"name": "Residential", "filter": ["==", "no_such_field", "R"]}
+            }
+        }
+    }
+    result = validate_settings_delta(delta, VALIDATION_PROFILE)
+    assert "res" not in result["cleaned"]["modeling"]["model_groups"]
+    assert any("no_such_field" in v for v in result["violations"])
+
+
+# ---------------------------------------------------------------------------
+# validate_settings_delta — Valid delta
+# ---------------------------------------------------------------------------
+
+def test_validate_valid_delta_passes_unchanged():
+    """A valid delta with only numeric/known columns should pass with no violations."""
+    delta = {
+        "modeling": {
+            "model_groups": {
+                "res": {
+                    "name": "Residential",
+                    "filter": ["==", "class", "R"],
+                    "exclude_features": ["school", "municipalname", "key", "class"],
+                }
+            },
+            "models": {
+                "default": {"dep_vars": ["sale_price"]}
+            },
+        }
+    }
+    result = validate_settings_delta(delta, VALIDATION_PROFILE)
+    assert result["violations"] == []
+    assert result["cleaned"] == delta
+
+
+# ---------------------------------------------------------------------------
+# validate_settings_delta — Rule 7: Empty model_groups warning
+# ---------------------------------------------------------------------------
+
+def test_validate_rule7_all_groups_skipped_warns():
+    """All groups being skipped should produce a warning but not strip."""
+    delta = {
+        "modeling": {
+            "model_groups": {
+                "res": {
+                    "name": "Residential",
+                    "filter": ["==", "class", "R"],
+                    "skip": ["all"],
+                },
+                "com": {
+                    "name": "Commercial",
+                    "filter": ["==", "class", "C"],
+                    "skip": ["all"],
+                },
+            }
+        }
+    }
+    result = validate_settings_delta(delta, VALIDATION_PROFILE)
+    # Groups should still be present (warning only, not stripped)
+    assert "res" in result["cleaned"]["modeling"]["model_groups"]
+    assert "com" in result["cleaned"]["modeling"]["model_groups"]
+    assert any("no active" in v.lower() or "all" in v.lower() for v in result["violations"])
+
+def test_validate_rule7_some_groups_active_no_warning():
+    """If at least one group is active, no empty-groups warning."""
+    delta = {
+        "modeling": {
+            "model_groups": {
+                "res": {
+                    "name": "Residential",
+                    "filter": ["==", "class", "R"],
+                },
+                "com": {
+                    "name": "Commercial",
+                    "filter": ["==", "class", "C"],
+                    "skip": ["all"],
+                },
+            }
+        }
+    }
+    result = validate_settings_delta(delta, VALIDATION_PROFILE)
+    warnings = [v for v in result["violations"] if "no active" in v.lower() or "all groups" in v.lower()]
+    assert warnings == []
+
+
+# ---------------------------------------------------------------------------
+# validate_settings_delta — Edge cases
+# ---------------------------------------------------------------------------
+
+def test_validate_multiple_violations_all_caught():
+    """A delta with multiple problems should report all violations."""
+    delta = {
+        "modeling": {
+            "model_groups": {
+                "res": {
+                    "name": "Residential",
+                    "filter": ["==", "class", "R"],
+                    "skip": "all",              # Rule 4: not a list
+                    "exclude_features": 42,      # Rule 5: not a list/number
+                },
+                "bad": "not a dict",             # Rule 3: not a dict
+            },
+            "models": {
+                "default": {"dep_vars": ["sale_price", "ghost_column"]}
+                                                 # Rule 2: ghost_column
+            },
+        }
+    }
+    result = validate_settings_delta(delta, VALIDATION_PROFILE)
+    assert len(result["violations"]) >= 3
+
+def test_validate_empty_delta():
+    """An empty delta should pass with no violations."""
+    result = validate_settings_delta({}, VALIDATION_PROFILE)
+    assert result["violations"] == []
+    assert result["cleaned"] == {}
+
+def test_validate_no_modeling_key():
+    """Delta without a modeling key should pass with no violations."""
+    delta = {"field_classification": {"important": {"school": "categorical"}}}
+    result = validate_settings_delta(delta, VALIDATION_PROFILE)
+    assert result["violations"] == []
+
+
+# ---------------------------------------------------------------------------
+# Integration: validation + re-prompt
+# ---------------------------------------------------------------------------
+
+def test_generate_initial_reprompts_on_violations(tmp_path):
+    """generate_initial should re-prompt Claude when validation finds issues."""
+    bad_delta = {
+        "modeling": {
+            "model_groups": {
+                "res": {"name": "Residential", "filter": ["==", "class", "R"]}
+            },
+            "models": {
+                "default": {"dep_vars": ["sale_price", "school"]}
+            },
+        }
+    }
+    good_delta = {
+        "modeling": {
+            "model_groups": {
+                "res": {
+                    "name": "Residential",
+                    "filter": ["==", "class", "R"],
+                    "exclude_features": ["school", "municipalname", "key", "class"],
+                }
+            },
+            "models": {
+                "default": {"dep_vars": ["sale_price"]}
+            },
+        }
+    }
+    bad_response = json.dumps({"settings": bad_delta, "reasoning": "first try"})
+    good_response = json.dumps({"settings": good_delta, "reasoning": "fixed"})
+
+    with patch("claude_settings.anthropic.Anthropic") as MockClient:
+        MockClient.return_value.messages.create.side_effect = [
+            _make_mock_response(bad_response),
+            _make_mock_response(good_response),
+        ]
+        result = generate_initial(
+            VALIDATION_PROFILE, SAMPLE_BASE_SETTINGS,
+            reasoning_log=tmp_path / "log.jsonl",
+        )
+    # Should have called Claude twice (initial + re-prompt)
+    assert MockClient.return_value.messages.create.call_count == 2
+    dep_vars = result.get("modeling", {}).get("models", {}).get("default", {}).get("dep_vars", [])
+    assert "school" not in dep_vars
+
+def test_generate_initial_no_reprompt_when_valid(tmp_path):
+    """generate_initial should NOT re-prompt when delta is valid."""
+    valid_delta = {
+        "modeling": {
+            "model_groups": {
+                "res": {
+                    "name": "Residential",
+                    "filter": ["==", "class", "R"],
+                    "exclude_features": ["school", "municipalname", "key", "class"],
+                }
+            },
+            "models": {
+                "default": {"dep_vars": ["sale_price"]}
+            },
+        }
+    }
+    response = json.dumps({"settings": valid_delta, "reasoning": "ok"})
+    with patch("claude_settings.anthropic.Anthropic") as MockClient:
+        MockClient.return_value.messages.create.return_value = _make_mock_response(response)
+        result = generate_initial(
+            VALIDATION_PROFILE, SAMPLE_BASE_SETTINGS,
+            reasoning_log=tmp_path / "log.jsonl",
+        )
+    assert MockClient.return_value.messages.create.call_count == 1
+
+def test_refine_after_model_reprompts_on_violations(tmp_path):
+    """refine_after_model should re-prompt Claude when validation finds issues."""
+    bad_delta = {
+        "modeling": {
+            "models": {
+                "default": {"dep_vars": ["sale_price", "school"]}
+            }
+        }
+    }
+    good_delta = {
+        "modeling": {
+            "models": {
+                "default": {"dep_vars": ["sale_price"]}
+            }
+        }
+    }
+    bad_resp = json.dumps({"settings": bad_delta, "reasoning": "try 1"})
+    good_resp = json.dumps({"settings": good_delta, "reasoning": "fixed"})
+
+    with patch("claude_settings.anthropic.Anthropic") as MockClient:
+        MockClient.return_value.messages.create.side_effect = [
+            _make_mock_response(bad_resp),
+            _make_mock_response(good_resp),
+        ]
+        result = refine_after_model(
+            VALIDATION_PROFILE, SAMPLE_CURRENT_SETTINGS,
+            SAMPLE_METRICS, iteration=1,
+            reasoning_log=tmp_path / "log.jsonl",
+        )
+    assert MockClient.return_value.messages.create.call_count == 2
+
+def test_generate_initial_returns_cleaned_if_reprompt_still_invalid(tmp_path):
+    """If re-prompt still has violations, return the cleaned version anyway."""
+    bad_delta = {
+        "modeling": {
+            "models": {
+                "default": {"dep_vars": ["sale_price", "school"]}
+            }
+        }
+    }
+    bad_resp = json.dumps({"settings": bad_delta, "reasoning": "still bad"})
+
+    with patch("claude_settings.anthropic.Anthropic") as MockClient:
+        MockClient.return_value.messages.create.return_value = _make_mock_response(bad_resp)
+        result = generate_initial(
+            VALIDATION_PROFILE, SAMPLE_BASE_SETTINGS,
+            reasoning_log=tmp_path / "log.jsonl",
+        )
+    dep_vars = result.get("modeling", {}).get("models", {}).get("default", {}).get("dep_vars", [])
+    assert "school" not in dep_vars
+
+def test_generate_initial_logs_violations(tmp_path):
+    """Validation violations should be logged to the reasoning file."""
+    bad_delta = {
+        "modeling": {
+            "models": {
+                "default": {"dep_vars": ["sale_price", "school"]}
+            }
+        }
+    }
+    good_delta = {
+        "modeling": {
+            "models": {
+                "default": {"dep_vars": ["sale_price"]}
+            }
+        }
+    }
+    bad_resp = json.dumps({"settings": bad_delta, "reasoning": "try 1"})
+    good_resp = json.dumps({"settings": good_delta, "reasoning": "fixed"})
+    log_path = tmp_path / "log.jsonl"
+
+    with patch("claude_settings.anthropic.Anthropic") as MockClient:
+        MockClient.return_value.messages.create.side_effect = [
+            _make_mock_response(bad_resp),
+            _make_mock_response(good_resp),
+        ]
+        generate_initial(
+            VALIDATION_PROFILE, SAMPLE_BASE_SETTINGS,
+            reasoning_log=log_path,
+        )
+    log_content = log_path.read_text()
+    assert "validation" in log_content
+    assert "school" in log_content
