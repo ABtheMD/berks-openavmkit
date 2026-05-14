@@ -318,6 +318,116 @@ def validate_settings_delta(
             )
             model_cfg["dep_vars"] = [x for x in dv if isinstance(x, str)]
 
+    # ==================================================================
+    # SEMANTIC RULES (run after structural rules normalize types)
+    # ==================================================================
+
+    # Build known-column and string-column sets from data profile
+    known_columns = set()
+    string_columns = set()
+    for _source, cols in data_profile.get("column_profiles", {}).items():
+        for col_name, col_info in cols.items():
+            known_columns.add(col_name)
+            if col_info.get("dtype") == "string":
+                string_columns.add(col_name)
+
+    # Build categorical set from current_settings + delta
+    categorical = set()
+    if current_settings:
+        fc = current_settings.get("field_classification", {})
+        for col, ctype in fc.get("important", {}).items():
+            if ctype == "categorical":
+                categorical.add(col)
+    fc_delta = cleaned.get("field_classification", {})
+    for col, ctype in fc_delta.get("important", {}).items():
+        if ctype == "categorical":
+            categorical.add(col)
+
+    # Strings that are dangerous as features (string but not categorical)
+    dangerous_strings = string_columns - categorical
+
+    # ── Rule 1: String features ──────────────────────────────────────
+    # 1a) dep_vars — remove string columns
+    for model_key, model_cfg in models.items():
+        if not isinstance(model_cfg, dict) or "dep_vars" not in model_cfg:
+            continue
+        if not isinstance(model_cfg["dep_vars"], list):
+            continue
+        cleaned_deps = []
+        for dv in model_cfg["dep_vars"]:
+            if dv in dangerous_strings:
+                violations.append(
+                    f"Removed string column '{dv}' from dep_vars in "
+                    f"models.{model_key} (would crash LightGBM)"
+                )
+            else:
+                cleaned_deps.append(dv)
+        model_cfg["dep_vars"] = cleaned_deps
+
+    # 1b) model_groups — add dangerous strings to exclude_features
+    for group_key, group_cfg in list(model_groups.items()):
+        if not isinstance(group_cfg, dict):
+            continue
+        existing_exclude = set(group_cfg.get("exclude_features", []))
+        to_add = sorted(dangerous_strings - existing_exclude)
+        if to_add:
+            group_cfg["exclude_features"] = sorted(existing_exclude | set(to_add))
+            violations.append(
+                f"Added string columns {to_add} to exclude_features for "
+                f"group '{group_key}' (would crash LightGBM)"
+            )
+
+    # ── Rule 2: Nonexistent columns ──────────────────────────────────
+    # 2a) exclude_features — remove unknown columns
+    for group_key, group_cfg in list(model_groups.items()):
+        if not isinstance(group_cfg, dict):
+            continue
+        if "exclude_features" in group_cfg and isinstance(
+            group_cfg["exclude_features"], list
+        ):
+            valid = [c for c in group_cfg["exclude_features"] if c in known_columns]
+            removed = [
+                c for c in group_cfg["exclude_features"] if c not in known_columns
+            ]
+            if removed:
+                violations.append(
+                    f"Removed nonexistent columns {removed} from "
+                    f"exclude_features in group '{group_key}'"
+                )
+                group_cfg["exclude_features"] = valid
+
+    # 2b) dep_vars — remove unknown columns
+    for model_key, model_cfg in models.items():
+        if not isinstance(model_cfg, dict) or "dep_vars" not in model_cfg:
+            continue
+        if not isinstance(model_cfg["dep_vars"], list):
+            continue
+        valid = [c for c in model_cfg["dep_vars"] if c in known_columns]
+        removed = [c for c in model_cfg["dep_vars"] if c not in known_columns]
+        if removed:
+            violations.append(
+                f"Removed nonexistent columns {removed} from "
+                f"dep_vars in models.{model_key}"
+            )
+            model_cfg["dep_vars"] = valid
+
+    # 2c) filters — remove groups with nonexistent filter fields
+    for group_key in list(model_groups.keys()):
+        group_cfg = model_groups[group_key]
+        if not isinstance(group_cfg, dict) or "filter" not in group_cfg:
+            continue
+        filt = group_cfg["filter"]
+        if isinstance(filt, list) and len(filt) >= 2:
+            op = filt[0]
+            if op not in ("and", "or") and len(filt) >= 2:
+                field = filt[1]
+                if isinstance(field, str) and field not in known_columns:
+                    violations.append(
+                        f"Removed group '{group_key}': filter references "
+                        f"nonexistent column '{field}'"
+                    )
+                    del model_groups[group_key]
+
     return {"cleaned": cleaned, "violations": violations}
 
 

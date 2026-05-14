@@ -367,3 +367,167 @@ def test_validate_rule6_non_string_dep_var_removed():
     dep_vars = result["cleaned"]["modeling"]["models"]["default"]["dep_vars"]
     assert "sale_price" in dep_vars
     assert 42 not in dep_vars
+
+
+# ---------------------------------------------------------------------------
+# validate_settings_delta — Rule 1: String features
+# ---------------------------------------------------------------------------
+
+def test_validate_rule1_string_dep_var_removed():
+    """String column in dep_vars should be removed."""
+    delta = {
+        "modeling": {
+            "models": {
+                "default": {"dep_vars": ["sale_price", "school"]}
+            }
+        }
+    }
+    result = validate_settings_delta(delta, VALIDATION_PROFILE)
+    dep_vars = result["cleaned"]["modeling"]["models"]["default"]["dep_vars"]
+    assert "school" not in dep_vars
+    assert "sale_price" in dep_vars
+    assert any("school" in v for v in result["violations"])
+
+def test_validate_rule1_string_columns_added_to_exclude():
+    """String columns not declared categorical should be added to exclude_features."""
+    delta = {
+        "modeling": {
+            "model_groups": {
+                "res": {"name": "Residential", "filter": ["==", "class", "R"]}
+            }
+        }
+    }
+    result = validate_settings_delta(delta, VALIDATION_PROFILE)
+    exclude = result["cleaned"]["modeling"]["model_groups"]["res"]["exclude_features"]
+    assert "school" in exclude
+    assert "municipalname" in exclude
+    assert len(result["violations"]) > 0
+
+def test_validate_rule1_categorical_not_excluded():
+    """String columns declared categorical in delta should NOT be excluded."""
+    delta = {
+        "field_classification": {
+            "important": {"school": "categorical"}
+        },
+        "modeling": {
+            "model_groups": {
+                "res": {"name": "Residential", "filter": ["==", "class", "R"]}
+            }
+        }
+    }
+    result = validate_settings_delta(delta, VALIDATION_PROFILE)
+    exclude = result["cleaned"]["modeling"]["model_groups"]["res"].get("exclude_features", [])
+    assert "school" not in exclude
+
+def test_validate_rule1_categorical_in_current_settings():
+    """String columns declared categorical in current_settings should NOT be excluded."""
+    delta = {
+        "modeling": {
+            "model_groups": {
+                "res": {"name": "Residential", "filter": ["==", "class", "R"]}
+            }
+        }
+    }
+    current = {
+        "field_classification": {
+            "important": {"school": "categorical", "municipalname": "categorical"}
+        }
+    }
+    result = validate_settings_delta(delta, VALIDATION_PROFILE, current_settings=current)
+    exclude = result["cleaned"]["modeling"]["model_groups"]["res"].get("exclude_features", [])
+    assert "school" not in exclude
+    assert "municipalname" not in exclude
+
+def test_validate_rule1_already_excluded_no_duplicate():
+    """String columns already in exclude_features should not be duplicated."""
+    delta = {
+        "modeling": {
+            "model_groups": {
+                "res": {
+                    "name": "Residential",
+                    "filter": ["==", "class", "R"],
+                    "exclude_features": ["school"],
+                }
+            }
+        }
+    }
+    result = validate_settings_delta(delta, VALIDATION_PROFILE)
+    exclude = result["cleaned"]["modeling"]["model_groups"]["res"]["exclude_features"]
+    assert exclude.count("school") == 1
+
+
+# ---------------------------------------------------------------------------
+# validate_settings_delta — Rule 2: Nonexistent columns
+# ---------------------------------------------------------------------------
+
+def test_validate_rule2_nonexistent_in_exclude_features():
+    """Nonexistent column in exclude_features should be removed."""
+    delta = {
+        "modeling": {
+            "model_groups": {
+                "res": {
+                    "name": "Residential",
+                    "filter": ["==", "class", "R"],
+                    "exclude_features": ["sale_price", "phantom_column"],
+                }
+            }
+        }
+    }
+    result = validate_settings_delta(delta, VALIDATION_PROFILE)
+    exclude = result["cleaned"]["modeling"]["model_groups"]["res"]["exclude_features"]
+    assert "phantom_column" not in exclude
+    assert "sale_price" in exclude
+    assert any("phantom_column" in v for v in result["violations"])
+
+def test_validate_rule2_nonexistent_dep_var():
+    """Nonexistent column in dep_vars should be removed."""
+    delta = {
+        "modeling": {
+            "models": {
+                "default": {"dep_vars": ["sale_price", "nonexistent_price"]}
+            }
+        }
+    }
+    result = validate_settings_delta(delta, VALIDATION_PROFILE)
+    dep_vars = result["cleaned"]["modeling"]["models"]["default"]["dep_vars"]
+    assert "nonexistent_price" not in dep_vars
+    assert "sale_price" in dep_vars
+    assert any("nonexistent_price" in v for v in result["violations"])
+
+def test_validate_rule2_nonexistent_in_filter():
+    """Nonexistent field in filter should cause group removal."""
+    delta = {
+        "modeling": {
+            "model_groups": {
+                "res": {"name": "Residential", "filter": ["==", "no_such_field", "R"]}
+            }
+        }
+    }
+    result = validate_settings_delta(delta, VALIDATION_PROFILE)
+    assert "res" not in result["cleaned"]["modeling"]["model_groups"]
+    assert any("no_such_field" in v for v in result["violations"])
+
+
+# ---------------------------------------------------------------------------
+# validate_settings_delta — Valid delta
+# ---------------------------------------------------------------------------
+
+def test_validate_valid_delta_passes_unchanged():
+    """A valid delta with only numeric/known columns should pass with no violations."""
+    delta = {
+        "modeling": {
+            "model_groups": {
+                "res": {
+                    "name": "Residential",
+                    "filter": ["==", "class", "R"],
+                    "exclude_features": ["school", "municipalname", "key", "class"],
+                }
+            },
+            "models": {
+                "default": {"dep_vars": ["sale_price"]}
+            },
+        }
+    }
+    result = validate_settings_delta(delta, VALIDATION_PROFILE)
+    assert result["violations"] == []
+    assert result["cleaned"] == delta
