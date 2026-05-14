@@ -14,6 +14,32 @@ _REPO_ROOT = Path(__file__).parent.parent
 DATA_BASE_DIR = _REPO_ROOT / "notebooks" / "pipeline" / "data"
 
 
+def _simplify_dtype(dtype) -> str:
+    """Map a pandas/numpy dtype to a simplified category string."""
+    name = str(dtype).lower()
+    if "int" in name:
+        return "int"
+    if "float" in name:
+        return "float"
+    if name in ("bool", "boolean"):
+        return "bool"
+    if name in ("object", "string") or "string" in name:
+        return "string"
+    return "other"
+
+
+def _profile_columns(df: pd.DataFrame) -> dict:
+    """Build a {column: {dtype, non_null, unique}} dict for a DataFrame."""
+    result = {}
+    for col in df.columns:
+        result[col] = {
+            "dtype": _simplify_dtype(df[col].dtype),
+            "non_null": int(df[col].notna().sum()),
+            "unique": int(df[col].nunique()),
+        }
+    return result
+
+
 def build_data_profile(locality_slug: str, data_base_dir: Path = None) -> dict:
     if data_base_dir is None:
         data_base_dir = DATA_BASE_DIR
@@ -72,9 +98,11 @@ def build_data_profile(locality_slug: str, data_base_dir: Path = None) -> dict:
             year_range = max(1, int(years.max()) - int(years.min()))
             annual_sales_volume = max(1, total_sales // year_range)
 
-    all_columns = list(df_master.columns)
-    if not df_geo.empty:
-        all_columns = sorted(set(all_columns) | set(df_geo.columns))
+    column_profiles = {}
+    for parquet_file in sorted(in_dir.glob("*.parquet")):
+        source_name = parquet_file.stem
+        df = pd.read_parquet(parquet_file)
+        column_profiles[source_name] = _profile_columns(df)
 
     return {
         "locality": locality_slug,
@@ -85,7 +113,7 @@ def build_data_profile(locality_slug: str, data_base_dir: Path = None) -> dict:
         "he_id_fill_rate_by_class": he_id_fill,
         "land_he_id_fill_rate_by_class": land_he_id_fill,
         "has_spatial_data": not df_geo.empty,
-        "available_columns": all_columns,
+        "column_profiles": column_profiles,
         "jurisdiction_tier": infer_jurisdiction_tier(total_parcels, annual_sales_volume),
     }
 

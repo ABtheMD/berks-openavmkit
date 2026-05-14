@@ -54,7 +54,12 @@ Rules:
    for a group is <0.05, add the corresponding field(s) to that group's
    exclude_features list. If has_spatial_data is true for the locality,
    flag spatial_he_inheritance=true for those groups instead of excluding.
-3. Respond with a JSON object with exactly two keys:
+3. Column types: The data profile includes column_profiles with dtype info
+   for each source file. NEVER add string-typed columns directly as model
+   features — they will crash LightGBM. String columns must first be listed
+   in field_classification.important as "categorical" before the pipeline
+   can encode and use them.
+4. Respond with a JSON object with exactly two keys:
    - "settings": the settings delta (will be merged into settings.json)
    - "reasoning": a plain-text explanation of each decision you made
 
@@ -74,8 +79,12 @@ Rules:
    - Add or remove dep_vars
    - Add or remove features from exclude_features
    - Adjust skip rules if a group has too few sales to model reliably
-3. State which IAAO tier you assigned and which COD range you used.
-4. Respond with a JSON object with exactly two keys:
+3. Column types: The data profile includes column_profiles with dtype info.
+   NEVER add string-typed columns as model features — they will crash
+   LightGBM. String columns must first be listed in
+   field_classification.important as "categorical".
+4. State which IAAO tier you assigned and which COD range you used.
+5. Respond with a JSON object with exactly two keys:
    - "settings": the settings delta to merge into settings.json
    - "reasoning": explanation of each change and which IAAO threshold applies
 
