@@ -51,3 +51,16 @@ def test_extract_bare_string():
 def test_extract_bare_number():
     """A bare number returns empty set."""
     assert _extract_calc_fields(42) == set()
+
+def test_extract_bare_operator():
+    """A bare operator string is not a field reference."""
+    assert _extract_calc_fields("+") == set()
+
+def test_extract_bool_value():
+    """A boolean value (Python bool is subclass of int) returns empty set."""
+    assert _extract_calc_fields(True) == set()
+    assert _extract_calc_fields(False) == set()
+
+def test_extract_none_value():
+    """None is silently ignored."""
+    assert _extract_calc_fields(None) == set()

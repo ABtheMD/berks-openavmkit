@@ -24,7 +24,8 @@ def _extract_calc_fields(expr) -> set:
     Recursively extract field name references from a calc DSL expression.
 
     Returns a set of field name strings. Ignores operators, string literals
-    (prefixed with 'str:'), and numeric values.
+    (prefixed with 'str:'), numeric values, and booleans. Any value of an
+    unrecognised type (e.g. None, dict) is silently ignored.
     """
     if isinstance(expr, (int, float)):
         return set()
@@ -37,18 +38,17 @@ def _extract_calc_fields(expr) -> set:
         return {expr}
 
     if isinstance(expr, list):
-        if len(expr) == 0:
+        if not expr:
             return set()
 
         op = expr[0] if isinstance(expr[0], str) else None
         fields = set()
 
-        # For isin, the third element is a value list — skip it
+        # For isin, extract the field operand (expr[1]) but skip the value
+        # list (expr[2]) — it contains literal values, not field references.
         if op == "isin":
-            # expr[1] is the field, expr[2] is the value list
             if len(expr) >= 2:
                 fields |= _extract_calc_fields(expr[1])
-            # Skip expr[2] — it's a list of literal values
             return fields
 
         # For all other operators, recurse into elements after the operator
