@@ -215,6 +215,66 @@ def _read_model_metrics(locality_data_dir: Path) -> dict:
     return metrics
 
 
+def _read_assessor_metrics(locality_data_dir: Path) -> dict:
+    """Read assessor ratio metrics from pred_sales.parquet files.
+
+    Mirrors _read_model_metrics() but reads assr_ratio from
+    pred_sales.parquet instead of prediction_ratio from pred_test.parquet.
+    Returns {"group_name": {"median_ratio": float, "cod": float, "count": int}}.
+    """
+    models_dir = locality_data_dir / "out" / "models"
+    if not models_dir.exists():
+        return {}
+
+    metrics = {}
+    for group_dir in sorted(models_dir.iterdir()):
+        if not group_dir.is_dir():
+            continue
+        pred_path = group_dir / "main" / "ensemble" / "pred_sales.parquet"
+        if not pred_path.exists():
+            continue
+        try:
+            df = pd.read_parquet(pred_path, columns=["assr_ratio"])
+        except (KeyError, ValueError):
+            # assr_ratio column not present in this parquet
+            continue
+        ratios = df["assr_ratio"].dropna()
+        if len(ratios) == 0:
+            continue
+        median = float(ratios.median())
+        cod = float((ratios - median).abs().mean() / median * 100)
+        metrics[group_dir.name] = {
+            "median_ratio": round(median, 4),
+            "cod": round(cod, 2),
+            "count": len(ratios),
+        }
+
+    return metrics
+
+
+def _print_baseline_comparison(model_metrics: dict, assessor_metrics: dict):
+    """Print a side-by-side comparison of assessor vs model performance."""
+    # Only compare groups that appear in both dicts
+    common_groups = sorted(
+        set(model_metrics.keys()) & set(assessor_metrics.keys())
+    )
+    if not common_groups:
+        return
+
+    print("[harness] === ASSESSOR BASELINE COMPARISON ===")
+    print(
+        f"  {'Group':<12} {'Assessor COD':>14} {'Model COD':>11} "
+        f"{'Assessor Ratio':>16} {'Model Ratio':>13}"
+    )
+    for group in common_groups:
+        a = assessor_metrics[group]
+        m = model_metrics[group]
+        print(
+            f"  {group:<12} {a['cod']:>14.2f} {m['cod']:>11.2f} "
+            f"{a['median_ratio']:>16.4f} {m['median_ratio']:>13.4f}"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Settings helpers
 # ---------------------------------------------------------------------------
@@ -536,7 +596,7 @@ def run_model(locality: str, iteration_count: int, verbose: bool):
 
         if _passes_iaao(metrics, jurisdiction_tier):
             print(f"[harness] All groups within IAAO range. Stopping after {i + 1} run(s).")
-            return
+            break
 
         if i < iteration_count - 1:
             print(f"[harness] Metrics outside IAAO range. Calling Claude for iteration {i + 2}...")
@@ -555,16 +615,27 @@ def run_model(locality: str, iteration_count: int, verbose: bool):
                 print(f"[harness] WARNING: Claude API call failed: {type(e).__name__}: {e}", file=sys.stderr)
                 print(f"[harness] Continuing with current settings.", file=sys.stderr)
 
-    if not metrics_history:
-        print(f"\n[harness] No model iterations completed.", file=sys.stderr)
     else:
-        best = _best_iteration(metrics_history, jurisdiction_tier)
-        print(
-            f"\n[harness] {iteration_count} iteration(s) exhausted. "
-            f"Best results were in iteration {best}. "
-            f"See out/settings_iter_{best - 1}.json for those settings.",
-            file=sys.stderr,
-        )
+        # for/else: runs only when the loop was NOT broken (IAAO never passed)
+        if not metrics_history:
+            print(f"\n[harness] No model iterations completed.", file=sys.stderr)
+        else:
+            best = _best_iteration(metrics_history, jurisdiction_tier)
+            print(
+                f"\n[harness] {iteration_count} iteration(s) exhausted. "
+                f"Best results were in iteration {best}. "
+                f"See out/settings_iter_{best - 1}.json for those settings.",
+                file=sys.stderr,
+            )
+
+    # Assessor baseline comparison (runs regardless of how loop exited)
+    model_metrics = _read_model_metrics(data_dir)
+    assessor_metrics = _read_assessor_metrics(data_dir)
+
+    if assessor_metrics:
+        _print_baseline_comparison(model_metrics, assessor_metrics)
+    else:
+        print("[harness] No assessor baseline available (assr_market_value not mapped).")
 
 
 def run_stages(

@@ -67,7 +67,7 @@ def _extract_calc_fields(expr) -> set:
 # ---------------------------------------------------------------------------
 
 CRITICAL_FIELDS = {"key", "sale_price", "sale_date", "class"}
-IMPORTANT_FIELDS = {"valid_sale", "vacant_sale", "he_id"}
+IMPORTANT_FIELDS = {"valid_sale", "vacant_sale", "he_id", "assr_market_value"}
 
 # Sales qualification distribution thresholds
 VALID_SALE_LOW_THRESHOLD = 0.05    # <5% valid → warning

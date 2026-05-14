@@ -222,6 +222,51 @@ def test_check1_missing_he_id_is_warning():
     result = validate_field_mapping(COMPLETE_SETTINGS, FIELD_MAPPING_PROFILE)
     assert any("he_id" in w for w in result["warnings"])
 
+def test_check1_missing_assr_market_value_is_warning():
+    """Missing 'assr_market_value' should produce a warning, not an error."""
+    settings = {
+        "data": {
+            "load": {
+                "cama_master": {
+                    "filename": "cama_master.parquet",
+                    "load": {
+                        "key": "parid",
+                        "sale_price": "price",
+                        "sale_date": "saledt",
+                        "class": "class",
+                    },
+                },
+            }
+        }
+    }
+    result = validate_field_mapping(settings, FIELD_MAPPING_PROFILE)
+    assert any("assr_market_value" in w for w in result["warnings"])
+    # Should NOT be in errors
+    assert not any("assr_market_value" in e for e in result["errors"])
+
+def test_check1_assr_market_value_present_no_warning():
+    """When assr_market_value is mapped, no warning about it is produced."""
+    settings = {
+        "data": {
+            "load": {
+                "cama_master": {
+                    "filename": "cama_master.parquet",
+                    "load": {
+                        "key": "parid",
+                        "sale_price": "price",
+                        "sale_date": "saledt",
+                        "class": "class",
+                    },
+                    "calc": {
+                        "assr_market_value": ["asint", "sale_price"],
+                    },
+                },
+            }
+        }
+    }
+    result = validate_field_mapping(settings, FIELD_MAPPING_PROFILE)
+    assert not any("assr_market_value" in w for w in result["warnings"])
+
 
 # ---------------------------------------------------------------------------
 # Check 2: Source column existence
