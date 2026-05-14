@@ -376,3 +376,232 @@ def test_model_recovery_all_iterations_fail(monkeypatch, tmp_path, capsys):
 
     captured = capsys.readouterr()
     assert "No model iterations completed" in captured.err
+
+
+# ---------------------------------------------------------------------------
+# FieldMappingError
+# ---------------------------------------------------------------------------
+
+def test_field_mapping_error_exists():
+    """FieldMappingError is importable from harness."""
+    assert hasattr(harness, "FieldMappingError")
+    assert issubclass(harness.FieldMappingError, Exception)
+
+
+# ---------------------------------------------------------------------------
+# Field mapping integration in run_configure
+# ---------------------------------------------------------------------------
+
+def test_configure_skips_claude_when_mappings_valid(monkeypatch, tmp_path):
+    """When fuzzy-matched mappings pass validation, Claude is NOT called for field mapping."""
+    locality = "test-valid"
+
+    valid_settings = {
+        "data": {
+            "load": {
+                "cama_master": {
+                    "filename": "cama_master.parquet",
+                    "load": {
+                        "key": "parid",
+                        "sale_price": "price",
+                        "sale_date": "saledt",
+                        "class": "class",
+                    },
+                    "calc": {
+                        "valid_sale": ["?", [">", "sale_price", 1000]],
+                        "vacant_sale": ["?", ["isin", "class", ["A"]]],
+                    },
+                },
+            }
+        },
+        "modeling": {"model_groups": {}},
+    }
+
+    profile = {
+        "locality": locality,
+        "total_parcels": 100,
+        "total_sales": 50,
+        "annual_sales_volume": 50,
+        "class_distribution": {},
+        "he_id_fill_rate_by_class": {},
+        "land_he_id_fill_rate_by_class": {},
+        "has_spatial_data": False,
+        "column_profiles": {
+            "cama_master": {
+                "parid": {"dtype": "string", "non_null": 100, "unique": 100},
+                "price": {"dtype": "float", "non_null": 50, "unique": 40},
+                "saledt": {"dtype": "string", "non_null": 50, "unique": 45},
+                "class": {"dtype": "string", "non_null": 100, "unique": 3},
+            },
+        },
+        "jurisdiction_tier": "rural_small",
+    }
+
+    refine_field_mapping_called = {"called": False}
+
+    monkeypatch.setattr(harness, "_run_subprocess", lambda *a, **kw: 0)
+    monkeypatch.setattr(harness, "_load_settings", lambda loc: valid_settings)
+    monkeypatch.setattr(harness, "_save_settings", lambda loc, s: None)
+    monkeypatch.setattr(harness, "_seed_path", lambda loc: tmp_path / "seed.json")
+
+    data_dir = tmp_path / "data" / locality
+    (data_dir / "out").mkdir(parents=True)
+    monkeypatch.setattr(harness, "_locality_data_dir", lambda loc: data_dir)
+
+    monkeypatch.setattr(
+        "profile_data.build_data_profile",
+        lambda *a, **kw: profile,
+    )
+    monkeypatch.setattr(
+        "validate_field_mapping.validate_field_mapping",
+        lambda settings, dp: {"errors": [], "warnings": []},
+    )
+
+    def fake_refine_field_mapping(*a, **kw):
+        refine_field_mapping_called["called"] = True
+        return None
+
+    monkeypatch.setattr(
+        "claude_settings.refine_field_mapping",
+        fake_refine_field_mapping,
+    )
+    monkeypatch.setattr(
+        "claude_settings.generate_initial",
+        lambda *a, **kw: {"modeling": {"model_groups": {"res": {"name": "Res"}}}},
+    )
+
+    harness.run_configure(locality, verbose=False)
+
+    # refine_field_mapping was NOT called (no errors)
+    assert not refine_field_mapping_called["called"]
+
+
+def test_configure_calls_claude_when_mappings_invalid(monkeypatch, tmp_path):
+    """When fuzzy-matched mappings have errors, Claude is called to fix them."""
+    locality = "test-invalid"
+
+    profile = {
+        "locality": locality,
+        "total_parcels": 100,
+        "total_sales": 50,
+        "annual_sales_volume": 50,
+        "class_distribution": {},
+        "he_id_fill_rate_by_class": {},
+        "land_he_id_fill_rate_by_class": {},
+        "has_spatial_data": False,
+        "column_profiles": {
+            "cama_master": {
+                "parid": {"dtype": "string", "non_null": 100, "unique": 100},
+                "price": {"dtype": "float", "non_null": 50, "unique": 40},
+            },
+        },
+        "jurisdiction_tier": "rural_small",
+    }
+
+    incomplete_settings = {
+        "data": {
+            "load": {
+                "cama_master": {
+                    "filename": "cama_master.parquet",
+                    "load": {"key": "parid"},
+                },
+            }
+        },
+        "modeling": {"model_groups": {}},
+    }
+
+    fix_delta = {
+        "data": {
+            "load": {
+                "cama_master": {
+                    "load": {"sale_price": "price"},
+                },
+            }
+        }
+    }
+
+    refine_field_mapping_called = {"called": False}
+
+    monkeypatch.setattr(harness, "_run_subprocess", lambda *a, **kw: 0)
+    monkeypatch.setattr(harness, "_load_settings", lambda loc: incomplete_settings)
+    monkeypatch.setattr(harness, "_save_settings", lambda loc, s: None)
+    monkeypatch.setattr(harness, "_seed_path", lambda loc: tmp_path / "seed.json")
+
+    data_dir = tmp_path / "data" / locality
+    (data_dir / "out").mkdir(parents=True)
+    monkeypatch.setattr(harness, "_locality_data_dir", lambda loc: data_dir)
+
+    monkeypatch.setattr(
+        "profile_data.build_data_profile",
+        lambda *a, **kw: profile,
+    )
+    monkeypatch.setattr(
+        "validate_field_mapping.validate_field_mapping",
+        lambda settings, dp: {"errors": ["Missing critical field 'sale_price'"], "warnings": []},
+    )
+
+    def fake_refine_field_mapping(*a, **kw):
+        refine_field_mapping_called["called"] = True
+        return fix_delta
+
+    monkeypatch.setattr(
+        "claude_settings.refine_field_mapping",
+        fake_refine_field_mapping,
+    )
+    monkeypatch.setattr(
+        "claude_settings.generate_initial",
+        lambda *a, **kw: {"modeling": {"model_groups": {}}},
+    )
+
+    harness.run_configure(locality, verbose=False)
+
+    # refine_field_mapping WAS called
+    assert refine_field_mapping_called["called"]
+
+
+def test_configure_raises_field_mapping_error_when_unfixable(monkeypatch, tmp_path):
+    """When Claude can't fix the mappings, FieldMappingError is raised."""
+    locality = "test-unfixable"
+
+    profile = {
+        "locality": locality,
+        "total_parcels": 100,
+        "total_sales": 50,
+        "annual_sales_volume": 50,
+        "class_distribution": {},
+        "he_id_fill_rate_by_class": {},
+        "land_he_id_fill_rate_by_class": {},
+        "has_spatial_data": False,
+        "column_profiles": {},
+        "jurisdiction_tier": "rural_small",
+    }
+
+    bad_settings = {
+        "data": {"load": {}},
+        "modeling": {"model_groups": {}},
+    }
+
+    monkeypatch.setattr(harness, "_run_subprocess", lambda *a, **kw: 0)
+    monkeypatch.setattr(harness, "_load_settings", lambda loc: bad_settings)
+    monkeypatch.setattr(harness, "_save_settings", lambda loc, s: None)
+    monkeypatch.setattr(harness, "_seed_path", lambda loc: tmp_path / "seed.json")
+
+    data_dir = tmp_path / "data" / locality
+    (data_dir / "out").mkdir(parents=True)
+    monkeypatch.setattr(harness, "_locality_data_dir", lambda loc: data_dir)
+
+    monkeypatch.setattr(
+        "profile_data.build_data_profile",
+        lambda *a, **kw: profile,
+    )
+    monkeypatch.setattr(
+        "validate_field_mapping.validate_field_mapping",
+        lambda settings, dp: {"errors": ["Missing critical field 'key'"], "warnings": []},
+    )
+    monkeypatch.setattr(
+        "claude_settings.refine_field_mapping",
+        lambda *a, **kw: None,
+    )
+
+    with pytest.raises(harness.FieldMappingError):
+        harness.run_configure(locality, verbose=False)
