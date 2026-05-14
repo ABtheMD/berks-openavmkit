@@ -620,3 +620,160 @@ def test_validate_no_modeling_key():
     delta = {"field_classification": {"important": {"school": "categorical"}}}
     result = validate_settings_delta(delta, VALIDATION_PROFILE)
     assert result["violations"] == []
+
+
+# ---------------------------------------------------------------------------
+# Integration: validation + re-prompt
+# ---------------------------------------------------------------------------
+
+def test_generate_initial_reprompts_on_violations(tmp_path):
+    """generate_initial should re-prompt Claude when validation finds issues."""
+    bad_delta = {
+        "modeling": {
+            "model_groups": {
+                "res": {"name": "Residential", "filter": ["==", "class", "R"]}
+            },
+            "models": {
+                "default": {"dep_vars": ["sale_price", "school"]}
+            },
+        }
+    }
+    good_delta = {
+        "modeling": {
+            "model_groups": {
+                "res": {
+                    "name": "Residential",
+                    "filter": ["==", "class", "R"],
+                    "exclude_features": ["school", "municipalname", "key", "class"],
+                }
+            },
+            "models": {
+                "default": {"dep_vars": ["sale_price"]}
+            },
+        }
+    }
+    bad_response = json.dumps({"settings": bad_delta, "reasoning": "first try"})
+    good_response = json.dumps({"settings": good_delta, "reasoning": "fixed"})
+
+    with patch("claude_settings.anthropic.Anthropic") as MockClient:
+        MockClient.return_value.messages.create.side_effect = [
+            _make_mock_response(bad_response),
+            _make_mock_response(good_response),
+        ]
+        result = generate_initial(
+            VALIDATION_PROFILE, SAMPLE_BASE_SETTINGS,
+            reasoning_log=tmp_path / "log.jsonl",
+        )
+    # Should have called Claude twice (initial + re-prompt)
+    assert MockClient.return_value.messages.create.call_count == 2
+    dep_vars = result.get("modeling", {}).get("models", {}).get("default", {}).get("dep_vars", [])
+    assert "school" not in dep_vars
+
+def test_generate_initial_no_reprompt_when_valid(tmp_path):
+    """generate_initial should NOT re-prompt when delta is valid."""
+    valid_delta = {
+        "modeling": {
+            "model_groups": {
+                "res": {
+                    "name": "Residential",
+                    "filter": ["==", "class", "R"],
+                    "exclude_features": ["school", "municipalname", "key", "class"],
+                }
+            },
+            "models": {
+                "default": {"dep_vars": ["sale_price"]}
+            },
+        }
+    }
+    response = json.dumps({"settings": valid_delta, "reasoning": "ok"})
+    with patch("claude_settings.anthropic.Anthropic") as MockClient:
+        MockClient.return_value.messages.create.return_value = _make_mock_response(response)
+        result = generate_initial(
+            VALIDATION_PROFILE, SAMPLE_BASE_SETTINGS,
+            reasoning_log=tmp_path / "log.jsonl",
+        )
+    assert MockClient.return_value.messages.create.call_count == 1
+
+def test_refine_after_model_reprompts_on_violations(tmp_path):
+    """refine_after_model should re-prompt Claude when validation finds issues."""
+    bad_delta = {
+        "modeling": {
+            "models": {
+                "default": {"dep_vars": ["sale_price", "school"]}
+            }
+        }
+    }
+    good_delta = {
+        "modeling": {
+            "models": {
+                "default": {"dep_vars": ["sale_price"]}
+            }
+        }
+    }
+    bad_resp = json.dumps({"settings": bad_delta, "reasoning": "try 1"})
+    good_resp = json.dumps({"settings": good_delta, "reasoning": "fixed"})
+
+    with patch("claude_settings.anthropic.Anthropic") as MockClient:
+        MockClient.return_value.messages.create.side_effect = [
+            _make_mock_response(bad_resp),
+            _make_mock_response(good_resp),
+        ]
+        result = refine_after_model(
+            VALIDATION_PROFILE, SAMPLE_CURRENT_SETTINGS,
+            SAMPLE_METRICS, iteration=1,
+            reasoning_log=tmp_path / "log.jsonl",
+        )
+    assert MockClient.return_value.messages.create.call_count == 2
+
+def test_generate_initial_returns_cleaned_if_reprompt_still_invalid(tmp_path):
+    """If re-prompt still has violations, return the cleaned version anyway."""
+    bad_delta = {
+        "modeling": {
+            "models": {
+                "default": {"dep_vars": ["sale_price", "school"]}
+            }
+        }
+    }
+    bad_resp = json.dumps({"settings": bad_delta, "reasoning": "still bad"})
+
+    with patch("claude_settings.anthropic.Anthropic") as MockClient:
+        MockClient.return_value.messages.create.return_value = _make_mock_response(bad_resp)
+        result = generate_initial(
+            VALIDATION_PROFILE, SAMPLE_BASE_SETTINGS,
+            reasoning_log=tmp_path / "log.jsonl",
+        )
+    dep_vars = result.get("modeling", {}).get("models", {}).get("default", {}).get("dep_vars", [])
+    assert "school" not in dep_vars
+
+def test_generate_initial_logs_violations(tmp_path):
+    """Validation violations should be logged to the reasoning file."""
+    bad_delta = {
+        "modeling": {
+            "models": {
+                "default": {"dep_vars": ["sale_price", "school"]}
+            }
+        }
+    }
+    good_delta = {
+        "modeling": {
+            "models": {
+                "default": {"dep_vars": ["sale_price"]}
+            }
+        }
+    }
+    bad_resp = json.dumps({"settings": bad_delta, "reasoning": "try 1"})
+    good_resp = json.dumps({"settings": good_delta, "reasoning": "fixed"})
+    log_path = tmp_path / "log.jsonl"
+
+    with patch("claude_settings.anthropic.Anthropic") as MockClient:
+        MockClient.return_value.messages.create.side_effect = [
+            _make_mock_response(bad_resp),
+            _make_mock_response(good_resp),
+        ]
+        generate_initial(
+            VALIDATION_PROFILE, SAMPLE_BASE_SETTINGS,
+            reasoning_log=log_path,
+        )
+    log_content = log_path.read_text()
+    assert "validation" in log_content
+    assert "school" in log_content

@@ -378,55 +378,59 @@ def validate_settings_delta(
             )
 
     # ── Rule 2: Nonexistent columns ──────────────────────────────────
-    # 2a) exclude_features — remove unknown columns
-    for group_key, group_cfg in list(model_groups.items()):
-        if not isinstance(group_cfg, dict):
-            continue
-        if "exclude_features" in group_cfg and isinstance(
-            group_cfg["exclude_features"], list
-        ):
-            valid = [c for c in group_cfg["exclude_features"] if c in known_columns]
-            removed = [
-                c for c in group_cfg["exclude_features"] if c not in known_columns
-            ]
+    # Only enforce when column_profiles is present; skip if known_columns is
+    # empty (old-format profiles without column_profiles have no basis for
+    # determining whether a column exists).
+    if known_columns:
+        # 2a) exclude_features — remove unknown columns
+        for group_key, group_cfg in list(model_groups.items()):
+            if not isinstance(group_cfg, dict):
+                continue
+            if "exclude_features" in group_cfg and isinstance(
+                group_cfg["exclude_features"], list
+            ):
+                valid = [c for c in group_cfg["exclude_features"] if c in known_columns]
+                removed = [
+                    c for c in group_cfg["exclude_features"] if c not in known_columns
+                ]
+                if removed:
+                    violations.append(
+                        f"Removed nonexistent columns {removed} from "
+                        f"exclude_features in group '{group_key}'"
+                    )
+                    group_cfg["exclude_features"] = valid
+
+        # 2b) dep_vars — remove unknown columns
+        for model_key, model_cfg in models.items():
+            if not isinstance(model_cfg, dict) or "dep_vars" not in model_cfg:
+                continue
+            if not isinstance(model_cfg["dep_vars"], list):
+                continue
+            valid = [c for c in model_cfg["dep_vars"] if c in known_columns]
+            removed = [c for c in model_cfg["dep_vars"] if c not in known_columns]
             if removed:
                 violations.append(
                     f"Removed nonexistent columns {removed} from "
-                    f"exclude_features in group '{group_key}'"
+                    f"dep_vars in models.{model_key}"
                 )
-                group_cfg["exclude_features"] = valid
+                model_cfg["dep_vars"] = valid
 
-    # 2b) dep_vars — remove unknown columns
-    for model_key, model_cfg in models.items():
-        if not isinstance(model_cfg, dict) or "dep_vars" not in model_cfg:
-            continue
-        if not isinstance(model_cfg["dep_vars"], list):
-            continue
-        valid = [c for c in model_cfg["dep_vars"] if c in known_columns]
-        removed = [c for c in model_cfg["dep_vars"] if c not in known_columns]
-        if removed:
-            violations.append(
-                f"Removed nonexistent columns {removed} from "
-                f"dep_vars in models.{model_key}"
-            )
-            model_cfg["dep_vars"] = valid
-
-    # 2c) filters — remove groups with nonexistent filter fields
-    for group_key in list(model_groups.keys()):
-        group_cfg = model_groups[group_key]
-        if not isinstance(group_cfg, dict) or "filter" not in group_cfg:
-            continue
-        filt = group_cfg["filter"]
-        if isinstance(filt, list) and len(filt) >= 2:
-            op = filt[0]
-            if op not in ("and", "or") and len(filt) >= 2:
-                field = filt[1]
-                if isinstance(field, str) and field not in known_columns:
-                    violations.append(
-                        f"Removed group '{group_key}': filter references "
-                        f"nonexistent column '{field}'"
-                    )
-                    del model_groups[group_key]
+        # 2c) filters — remove groups with nonexistent filter fields
+        for group_key in list(model_groups.keys()):
+            group_cfg = model_groups[group_key]
+            if not isinstance(group_cfg, dict) or "filter" not in group_cfg:
+                continue
+            filt = group_cfg["filter"]
+            if isinstance(filt, list) and len(filt) >= 2:
+                op = filt[0]
+                if op not in ("and", "or") and len(filt) >= 2:
+                    field = filt[1]
+                    if isinstance(field, str) and field not in known_columns:
+                        violations.append(
+                            f"Removed group '{group_key}': filter references "
+                            f"nonexistent column '{field}'"
+                        )
+                        del model_groups[group_key]
 
     # ==================================================================
     # WARNING RULES
@@ -445,6 +449,91 @@ def validate_settings_delta(
             )
 
     return {"cleaned": cleaned, "violations": violations}
+
+
+# ---------------------------------------------------------------------------
+# Validation + re-prompt helper
+# ---------------------------------------------------------------------------
+
+def _validate_and_reprompt(
+    client,
+    messages: list,
+    system: str,
+    settings_delta: dict,
+    data_profile: dict,
+    current_settings: dict,
+    reasoning_log: Path,
+    call_type: str,
+) -> dict:
+    """
+    Validate a settings delta. If violations found, re-prompt Claude once.
+
+    Returns the cleaned delta from whichever pass is cleanest.
+    """
+    result = validate_settings_delta(settings_delta, data_profile, current_settings)
+
+    if not result["violations"]:
+        return result["cleaned"]
+
+    # Log violations
+    if reasoning_log is not None:
+        _write_reasoning(
+            "Validation violations:\n"
+            + "\n".join(f"- {v}" for v in result["violations"]),
+            "validation",
+            reasoning_log,
+        )
+
+    # Build re-prompt with violations and cleaned delta
+    violation_list = "\n".join(f"- {v}" for v in result["violations"])
+    reprompt_content = (
+        f"Your settings delta had validation errors:\n{violation_list}\n\n"
+        f"The invalid parts have been removed. The cleaned delta is:\n"
+        f"```json\n{json.dumps(result['cleaned'], indent=2)}\n```\n\n"
+        f"Please provide a corrected settings delta that addresses "
+        f"these issues.\n"
+        f'Respond with ONLY a JSON object with keys "settings" and '
+        f'"reasoning".'
+    )
+
+    reprompt_messages = messages + [
+        {
+            "role": "assistant",
+            "content": json.dumps(
+                {"settings": settings_delta, "reasoning": ""}
+            ),
+        },
+        {"role": "user", "content": reprompt_content},
+    ]
+
+    try:
+        reprompt_parsed = _call_with_retry(client, reprompt_messages, system)
+        reprompt_delta = reprompt_parsed.get("settings", reprompt_parsed)
+        reprompt_reasoning = reprompt_parsed.get("reasoning", "")
+
+        if reasoning_log is not None:
+            _write_reasoning(
+                reprompt_reasoning, f"{call_type}_reprompt", reasoning_log
+            )
+
+        # Validate the re-prompt response
+        reprompt_result = validate_settings_delta(
+            reprompt_delta, data_profile, current_settings
+        )
+
+        if reprompt_result["violations"] and reasoning_log is not None:
+            _write_reasoning(
+                "Re-prompt still has violations:\n"
+                + "\n".join(f"- {v}" for v in reprompt_result["violations"]),
+                "validation",
+                reasoning_log,
+            )
+
+        return reprompt_result["cleaned"]
+
+    except ClaudeParseError:
+        # If re-prompt fails to parse, return cleaned delta from first pass
+        return result["cleaned"]
 
 
 # ---------------------------------------------------------------------------
@@ -491,10 +580,15 @@ def generate_initial(
     settings_delta = parsed.get("settings", parsed)
     reasoning = parsed.get("reasoning", "")
 
-    if reasoning_log is not None:
-        _write_reasoning(reasoning, "generate_initial", Path(reasoning_log))
+    log_path = Path(reasoning_log) if reasoning_log is not None else None
+    if log_path is not None:
+        _write_reasoning(reasoning, "generate_initial", log_path)
 
-    return settings_delta
+    return _validate_and_reprompt(
+        client, messages, _SYSTEM_CONFIGURE,
+        settings_delta, data_profile, base_settings,
+        log_path, "generate_initial",
+    )
 
 
 def refine_after_model(
@@ -545,7 +639,12 @@ def refine_after_model(
     settings_delta = parsed.get("settings", parsed)
     reasoning = parsed.get("reasoning", "")
 
-    if reasoning_log is not None:
-        _write_reasoning(reasoning, f"refine_iter_{iteration}", Path(reasoning_log))
+    log_path = Path(reasoning_log) if reasoning_log is not None else None
+    if log_path is not None:
+        _write_reasoning(reasoning, f"refine_iter_{iteration}", log_path)
 
-    return settings_delta
+    return _validate_and_reprompt(
+        client, messages, _SYSTEM_REFINE,
+        settings_delta, data_profile, current_settings,
+        log_path, f"refine_iter_{iteration}",
+    )
