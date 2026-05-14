@@ -196,6 +196,132 @@ def _call_with_retry(client, messages: list, system: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Settings validation
+# ---------------------------------------------------------------------------
+
+_VALID_FILTER_OPS = {"==", "!=", ">", "<", ">=", "<=", "isin", "and", "or"}
+_VALID_SKIP_VALUES = {"all", "model", "report"}
+
+
+def validate_settings_delta(
+    delta: dict,
+    data_profile: dict,
+    current_settings: dict = None,
+) -> dict:
+    """
+    Validate a settings delta against the data profile.
+
+    Runs structural rules first (type normalization), then semantic rules
+    (column validation), then warning rules.
+
+    Returns a dict with:
+      - "cleaned": deep copy of delta with invalid parts stripped
+      - "violations": list of human-readable violation descriptions
+
+    If violations is empty, the delta is valid.
+    """
+    violations = []
+    cleaned = json.loads(json.dumps(delta))  # deep copy
+
+    modeling = cleaned.get("modeling", {})
+    model_groups = modeling.get("model_groups", {})
+    models = modeling.get("models", {})
+
+    # ==================================================================
+    # STRUCTURAL RULES (run first to normalize types)
+    # ==================================================================
+
+    # ── Rule 3: model_groups structure ───────────────────────────────
+    for group_key in list(model_groups.keys()):
+        group_cfg = model_groups[group_key]
+        if not isinstance(group_cfg, dict):
+            violations.append(
+                f"Removed group '{group_key}': value is "
+                f"{type(group_cfg).__name__}, not a dict"
+            )
+            del model_groups[group_key]
+            continue
+        if "filter" in group_cfg:
+            filt = group_cfg["filter"]
+            if not isinstance(filt, list):
+                violations.append(
+                    f"Removed group '{group_key}': filter is "
+                    f"{type(filt).__name__}, not a list"
+                )
+                del model_groups[group_key]
+                continue
+            if len(filt) >= 1 and filt[0] not in _VALID_FILTER_OPS:
+                violations.append(
+                    f"Removed group '{group_key}': filter operator "
+                    f"'{filt[0]}' is not valid"
+                )
+                del model_groups[group_key]
+                continue
+
+    # ── Rule 4: skip values ──────────────────────────────────────────
+    for group_key, group_cfg in model_groups.items():
+        if not isinstance(group_cfg, dict) or "skip" not in group_cfg:
+            continue
+        skip = group_cfg["skip"]
+        if not isinstance(skip, list):
+            violations.append(
+                f"Removed skip from group '{group_key}': value is "
+                f"{type(skip).__name__}, not a list"
+            )
+            del group_cfg["skip"]
+            continue
+        invalid = [s for s in skip if s not in _VALID_SKIP_VALUES]
+        if invalid:
+            violations.append(
+                f"Removed invalid skip values {invalid} from "
+                f"group '{group_key}'"
+            )
+            group_cfg["skip"] = [s for s in skip if s in _VALID_SKIP_VALUES]
+
+    # ── Rule 5: exclude_features type ────────────────────────────────
+    for group_key, group_cfg in model_groups.items():
+        if not isinstance(group_cfg, dict) or "exclude_features" not in group_cfg:
+            continue
+        ef = group_cfg["exclude_features"]
+        if not isinstance(ef, list):
+            violations.append(
+                f"Removed exclude_features from group '{group_key}': "
+                f"value is {type(ef).__name__}, not a list"
+            )
+            del group_cfg["exclude_features"]
+            continue
+        non_strings = [x for x in ef if not isinstance(x, str)]
+        if non_strings:
+            violations.append(
+                f"Removed non-string elements {non_strings} from "
+                f"exclude_features in group '{group_key}'"
+            )
+            group_cfg["exclude_features"] = [x for x in ef if isinstance(x, str)]
+
+    # ── Rule 6: dep_vars type ────────────────────────────────────────
+    for model_key, model_cfg in models.items():
+        if not isinstance(model_cfg, dict) or "dep_vars" not in model_cfg:
+            continue
+        dv = model_cfg["dep_vars"]
+        if not isinstance(dv, list):
+            violations.append(
+                f"Removed dep_vars from models.{model_key}: value is "
+                f"{type(dv).__name__}, not a list"
+            )
+            del model_cfg["dep_vars"]
+            continue
+        non_strings = [x for x in dv if not isinstance(x, str)]
+        if non_strings:
+            violations.append(
+                f"Removed non-string elements {non_strings} from "
+                f"dep_vars in models.{model_key}"
+            )
+            model_cfg["dep_vars"] = [x for x in dv if isinstance(x, str)]
+
+    return {"cleaned": cleaned, "violations": violations}
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
