@@ -828,3 +828,132 @@ def test_assemble_passes_clean_data(monkeypatch, tmp_path, capsys):
 
     captured = capsys.readouterr()
     assert "Sales qualification" in captured.out or "valid" in captured.out.lower()
+
+
+# ---------------------------------------------------------------------------
+# Assessor baseline integration in run_model
+# ---------------------------------------------------------------------------
+
+def test_run_model_prints_baseline_comparison(monkeypatch, tmp_path, capsys):
+    """After model completes, assessor baseline comparison appears in output."""
+    def fake_run_subprocess(script, locality, verbose, extra_args=None):
+        return 0
+
+    monkeypatch.setattr(harness, "_run_subprocess", fake_run_subprocess)
+
+    data_dir = tmp_path / "us-pa-berks"
+    data_dir.mkdir()
+    settings_path = data_dir / "in" / "settings.json"
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text(json.dumps({"modeling": {"model_groups": {"res": {}}}}))
+
+    monkeypatch.setattr(harness, "_NOTEBOOKS_PIPELINE", tmp_path)
+    monkeypatch.setattr(harness, "_locality_data_dir", lambda loc: data_dir)
+    monkeypatch.setattr(harness, "_settings_path", lambda loc: settings_path)
+
+    monkeypatch.setattr(
+        "profile_data.build_data_profile",
+        lambda *a, **kw: {"jurisdiction_tier": "large_to_mid"},
+    )
+
+    # Create pred_test.parquet (model metrics) and pred_sales.parquet (assessor metrics)
+    group_dir = data_dir / "out" / "models" / "res" / "main" / "ensemble"
+    group_dir.mkdir(parents=True)
+    pd.DataFrame({"prediction_ratio": [0.95, 1.00, 1.05]}).to_parquet(
+        group_dir / "pred_test.parquet", index=False
+    )
+    pd.DataFrame({"assr_ratio": [0.36, 0.40, 0.38]}).to_parquet(
+        group_dir / "pred_sales.parquet", index=False
+    )
+
+    # Force IAAO pass so we hit the early exit path
+    monkeypatch.setattr(harness, "_passes_iaao", lambda *a, **kw: True)
+
+    harness.run_model("us-pa-berks", iteration_count=3, verbose=False)
+
+    captured = capsys.readouterr()
+    assert "ASSESSOR BASELINE COMPARISON" in captured.out
+    assert "res" in captured.out
+
+
+def test_run_model_prints_baseline_after_exhaustion(monkeypatch, tmp_path, capsys):
+    """Baseline comparison also prints when iterations are exhausted (not just IAAO pass)."""
+    def fake_run_subprocess(script, locality, verbose, extra_args=None):
+        return 0
+
+    monkeypatch.setattr(harness, "_run_subprocess", fake_run_subprocess)
+
+    data_dir = tmp_path / "us-pa-berks"
+    data_dir.mkdir()
+    settings_path = data_dir / "in" / "settings.json"
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text(json.dumps({"modeling": {"model_groups": {"res": {}}}}))
+
+    monkeypatch.setattr(harness, "_NOTEBOOKS_PIPELINE", tmp_path)
+    monkeypatch.setattr(harness, "_locality_data_dir", lambda loc: data_dir)
+    monkeypatch.setattr(harness, "_settings_path", lambda loc: settings_path)
+
+    monkeypatch.setattr(
+        "profile_data.build_data_profile",
+        lambda *a, **kw: {"jurisdiction_tier": "large_to_mid"},
+    )
+
+    group_dir = data_dir / "out" / "models" / "res" / "main" / "ensemble"
+    group_dir.mkdir(parents=True)
+    pd.DataFrame({"prediction_ratio": [0.95, 1.00, 1.05]}).to_parquet(
+        group_dir / "pred_test.parquet", index=False
+    )
+    pd.DataFrame({"assr_ratio": [0.36, 0.40, 0.38]}).to_parquet(
+        group_dir / "pred_sales.parquet", index=False
+    )
+
+    # Force IAAO to always fail so the loop exhausts
+    monkeypatch.setattr(harness, "_passes_iaao", lambda *a, **kw: False)
+    monkeypatch.setattr(
+        "claude_settings.refine_after_model",
+        lambda *a, **kw: {},
+    )
+
+    harness.run_model("us-pa-berks", iteration_count=2, verbose=False)
+
+    captured = capsys.readouterr()
+    assert "ASSESSOR BASELINE COMPARISON" in captured.out
+    assert "exhausted" in captured.err  # loop exhaustion message still appears
+
+
+def test_run_model_no_assessor_data_prints_fallback(monkeypatch, tmp_path, capsys):
+    """When no assessor data is available, prints fallback message."""
+    def fake_run_subprocess(script, locality, verbose, extra_args=None):
+        return 0
+
+    monkeypatch.setattr(harness, "_run_subprocess", fake_run_subprocess)
+
+    data_dir = tmp_path / "us-pa-berks"
+    data_dir.mkdir()
+    settings_path = data_dir / "in" / "settings.json"
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text(json.dumps({"modeling": {"model_groups": {"res": {}}}}))
+
+    monkeypatch.setattr(harness, "_NOTEBOOKS_PIPELINE", tmp_path)
+    monkeypatch.setattr(harness, "_locality_data_dir", lambda loc: data_dir)
+    monkeypatch.setattr(harness, "_settings_path", lambda loc: settings_path)
+
+    monkeypatch.setattr(
+        "profile_data.build_data_profile",
+        lambda *a, **kw: {"jurisdiction_tier": "large_to_mid"},
+    )
+
+    # Only create pred_test.parquet (no pred_sales.parquet)
+    group_dir = data_dir / "out" / "models" / "res" / "main" / "ensemble"
+    group_dir.mkdir(parents=True)
+    pd.DataFrame({"prediction_ratio": [0.95, 1.00, 1.05]}).to_parquet(
+        group_dir / "pred_test.parquet", index=False
+    )
+
+    monkeypatch.setattr(harness, "_passes_iaao", lambda *a, **kw: True)
+
+    harness.run_model("us-pa-berks", iteration_count=1, verbose=False)
+
+    captured = capsys.readouterr()
+    assert "No assessor baseline available" in captured.out
+    assert "ASSESSOR BASELINE COMPARISON" not in captured.out

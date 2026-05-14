@@ -596,7 +596,7 @@ def run_model(locality: str, iteration_count: int, verbose: bool):
 
         if _passes_iaao(metrics, jurisdiction_tier):
             print(f"[harness] All groups within IAAO range. Stopping after {i + 1} run(s).")
-            return
+            break
 
         if i < iteration_count - 1:
             print(f"[harness] Metrics outside IAAO range. Calling Claude for iteration {i + 2}...")
@@ -615,16 +615,27 @@ def run_model(locality: str, iteration_count: int, verbose: bool):
                 print(f"[harness] WARNING: Claude API call failed: {type(e).__name__}: {e}", file=sys.stderr)
                 print(f"[harness] Continuing with current settings.", file=sys.stderr)
 
-    if not metrics_history:
-        print(f"\n[harness] No model iterations completed.", file=sys.stderr)
     else:
-        best = _best_iteration(metrics_history, jurisdiction_tier)
-        print(
-            f"\n[harness] {iteration_count} iteration(s) exhausted. "
-            f"Best results were in iteration {best}. "
-            f"See out/settings_iter_{best - 1}.json for those settings.",
-            file=sys.stderr,
-        )
+        # for/else: runs only when the loop was NOT broken (IAAO never passed)
+        if not metrics_history:
+            print(f"\n[harness] No model iterations completed.", file=sys.stderr)
+        else:
+            best = _best_iteration(metrics_history, jurisdiction_tier)
+            print(
+                f"\n[harness] {iteration_count} iteration(s) exhausted. "
+                f"Best results were in iteration {best}. "
+                f"See out/settings_iter_{best - 1}.json for those settings.",
+                file=sys.stderr,
+            )
+
+    # Assessor baseline comparison (runs regardless of how loop exited)
+    model_metrics = _read_model_metrics(data_dir)
+    assessor_metrics = _read_assessor_metrics(data_dir)
+
+    if assessor_metrics:
+        _print_baseline_comparison(model_metrics, assessor_metrics)
+    else:
+        print("[harness] No assessor baseline available (assr_market_value not mapped).")
 
 
 def run_stages(
