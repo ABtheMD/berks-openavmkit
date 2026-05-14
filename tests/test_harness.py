@@ -343,3 +343,36 @@ def test_model_recovery_restores_settings_on_disk(monkeypatch, tmp_path):
     restored = json.loads(settings_path.read_text())
     assert restored == original_settings
     assert "CORRUPTED" not in str(restored)
+
+
+def test_model_recovery_all_iterations_fail(monkeypatch, tmp_path, capsys):
+    """When every model iteration fails, the harness should not crash and
+    should report that no iterations completed."""
+
+    def fake_run_subprocess(script, locality, verbose, extra_args=None):
+        if "_run_model" in str(script):
+            return 1  # every run fails
+        return 0
+
+    monkeypatch.setattr(harness, "_run_subprocess", fake_run_subprocess)
+
+    data_dir = tmp_path / "us-pa-berks"
+    data_dir.mkdir()
+    settings_path = data_dir / "in" / "settings.json"
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text(json.dumps({"modeling": {"model_groups": {"res": {}}}}))
+
+    monkeypatch.setattr(harness, "_NOTEBOOKS_PIPELINE", tmp_path)
+    monkeypatch.setattr(harness, "_locality_data_dir", lambda loc: data_dir)
+    monkeypatch.setattr(harness, "_settings_path", lambda loc: settings_path)
+
+    monkeypatch.setattr(
+        "profile_data.build_data_profile",
+        lambda *a, **kw: {"jurisdiction_tier": "large_to_mid"},
+    )
+
+    # Should NOT raise SystemExit
+    harness.run_model("us-pa-berks", iteration_count=3, verbose=False)
+
+    captured = capsys.readouterr()
+    assert "No model iterations completed" in captured.err
