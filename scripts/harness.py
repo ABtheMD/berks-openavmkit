@@ -393,8 +393,11 @@ def run_configure(locality: str, verbose: bool):
             fm_delta = refine_field_mapping(
                 data_profile, base_settings, reasoning_log=reasoning_log,
             )
-        except (ClaudeParseError, Exception) as e:
+        except ClaudeParseError as e:
             print(f"[harness] WARNING: Claude field mapping refinement failed: {e}", file=sys.stderr)
+            fm_delta = None
+        except Exception as e:
+            print(f"[harness] WARNING: Claude API call failed: {type(e).__name__}: {e}", file=sys.stderr)
             fm_delta = None
 
         if fm_delta is None:
