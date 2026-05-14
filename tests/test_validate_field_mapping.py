@@ -410,7 +410,6 @@ def test_validate_no_column_profiles():
 # validate_sales_qualification
 # ---------------------------------------------------------------------------
 
-import numpy as np
 import pandas as pd
 from validate_field_mapping import (
     validate_sales_qualification,

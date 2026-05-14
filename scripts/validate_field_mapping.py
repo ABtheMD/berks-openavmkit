@@ -256,7 +256,7 @@ def validate_sales_qualification(df) -> dict:
     # Checks 4-6: valid_sale distribution
     # ------------------------------------------------------------------
     if has_valid_sale:
-        valid_among_sales = df.loc[sale_mask, "valid_sale"].astype("boolean").fillna(False).astype(bool)
+        valid_among_sales = df.loc[sale_mask, "valid_sale"].eq(True)
         n_valid = int(valid_among_sales.sum())
         valid_rate = n_valid / n_sales
 
@@ -288,7 +288,7 @@ def validate_sales_qualification(df) -> dict:
     # Check 7: No vacant sales
     # ------------------------------------------------------------------
     if has_vacant_sale:
-        vacant_among_sales = df.loc[sale_mask, "vacant_sale"].astype("boolean").fillna(False).astype(bool)
+        vacant_among_sales = df.loc[sale_mask, "vacant_sale"].eq(True)
         n_vacant = int(vacant_among_sales.sum())
 
         if n_vacant == 0:
