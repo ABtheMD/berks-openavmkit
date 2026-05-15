@@ -742,7 +742,8 @@ def calc_correlations(
     # ------------------------------------------------------------------
     if len(remaining) < 2:
         # Not enough variables to compute meaningful correlations
-        return {"initial": first_run, "final": pd.DataFrame(columns=["variable", "corr_strength", "corr_clarity", "corr_score"]), "bad_vars": bad_vars}
+        empty_df = pd.DataFrame(columns=["variable", "corr_strength", "corr_clarity", "corr_score"])
+        return {"initial": first_run if first_run is not None else empty_df, "final": empty_df, "bad_vars": bad_vars}
 
     target_col = remaining[0]
 

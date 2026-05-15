@@ -587,14 +587,18 @@ def get_variable_recommendations(
     # Remove bad variables
     ind_vars = [var for var in ds.ind_vars if var not in bad_vars]
     
-    if "corr" in tests_to_run:
+    if "corr" in tests_to_run and len(ind_vars) > 0:
         # Correlation
         X_corr = ds.df_sales[[ds.dep_var] + ind_vars]
         t.start("variables.corr")
         corr_results = calc_correlations(X_corr, thresh.get("correlation", 0.1), do_plots=do_plots)
-        
+
         # Remove bad variables
         ind_vars = [var for var in ds.ind_vars if var not in corr_results["bad_vars"]]
+
+        # If correlation produced no meaningful results, treat as if not run
+        if corr_results["final"].empty:
+            corr_results = None
         t.stop("variables.corr")
     else:
         corr_results = None
@@ -3332,6 +3336,8 @@ def _calc_variable_recommendations(
 
         for state in ["initial", "final"]:
             # Correlation:
+            if correlation_results is None:
+                continue
             dfr_corr = correlation_results[state][corr_fields].copy()
             dfr_corr["Pass/Fail"] = dfr_corr["corr_score"].apply(
                 lambda x: "✅" if x > thresh_corr else "❌"
