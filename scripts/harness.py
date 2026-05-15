@@ -435,6 +435,15 @@ def run_configure(locality: str, verbose: bool):
         print(f"[harness] generate_settings failed (exit {rc})", file=sys.stderr)
         raise SystemExit(rc)
 
+    # --- Fill in load maps, calcs, and merge from parquet schemas ---
+    rc = _run_subprocess(
+        _SCRIPTS_DIR / "configure_settings.py", locality, verbose,
+        extra_args=[str(seed), "--in-dir", str(_locality_data_dir(locality) / "in")],
+    )
+    if rc != 0:
+        print(f"[harness] configure_settings failed (exit {rc})", file=sys.stderr)
+        raise SystemExit(rc)
+
     from profile_data import build_data_profile
     from claude_settings import generate_initial, refine_field_mapping, ClaudeParseError
     from validate_field_mapping import validate_field_mapping

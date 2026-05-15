@@ -957,3 +957,96 @@ def test_run_model_no_assessor_data_prints_fallback(monkeypatch, tmp_path, capsy
     captured = capsys.readouterr()
     assert "No assessor baseline available" in captured.out
     assert "ASSESSOR BASELINE COMPARISON" not in captured.out
+
+
+# ---------------------------------------------------------------------------
+# configure_settings.py integration in run_configure
+# ---------------------------------------------------------------------------
+
+def test_configure_calls_configure_settings_script(monkeypatch, tmp_path):
+    """run_configure calls configure_settings.py after generate_settings.py."""
+    locality = "test-configure"
+    subprocess_calls = []
+
+    def fake_run_subprocess(script, locality, verbose, extra_args=None):
+        subprocess_calls.append(str(script))
+        return 0
+
+    monkeypatch.setattr(harness, "_run_subprocess", fake_run_subprocess)
+    monkeypatch.setattr(harness, "_load_settings", lambda loc: {
+        "data": {"load": {"cama_master": {"load": {"key": "parid", "sale_price": "price", "sale_date": "saledt", "class": "class"}, "calc": {"valid_sale": ["?", True], "vacant_sale": ["?", False]}}}},
+        "modeling": {"model_groups": {}},
+    })
+    monkeypatch.setattr(harness, "_save_settings", lambda loc, s: None)
+    monkeypatch.setattr(harness, "_seed_path", lambda loc: tmp_path / "seed.json")
+
+    data_dir = tmp_path / "data" / locality
+    (data_dir / "out").mkdir(parents=True)
+    monkeypatch.setattr(harness, "_locality_data_dir", lambda loc: data_dir)
+
+    monkeypatch.setattr(
+        "profile_data.build_data_profile",
+        lambda *a, **kw: {"column_profiles": {}, "jurisdiction_tier": "rural_small"},
+    )
+    monkeypatch.setattr(
+        "validate_field_mapping.validate_field_mapping",
+        lambda settings, dp: {"errors": [], "warnings": []},
+    )
+    monkeypatch.setattr(
+        "claude_settings.generate_initial",
+        lambda *a, **kw: {"modeling": {"model_groups": {}}},
+    )
+
+    harness.run_configure(locality, verbose=False)
+
+    # Both generate_settings.py AND configure_settings.py should have been called
+    script_names = [Path(s).name for s in subprocess_calls]
+    assert "generate_settings.py" in script_names
+    assert "configure_settings.py" in script_names
+
+
+def test_configure_settings_runs_before_field_validation(monkeypatch, tmp_path):
+    """configure_settings.py runs BEFORE field mapping validation."""
+    locality = "test-order"
+    call_order = []
+
+    def fake_run_subprocess(script, locality, verbose, extra_args=None):
+        call_order.append(("subprocess", Path(script).name))
+        return 0
+
+    monkeypatch.setattr(harness, "_run_subprocess", fake_run_subprocess)
+    monkeypatch.setattr(harness, "_load_settings", lambda loc: {
+        "data": {"load": {"cama_master": {"load": {"key": "parid", "sale_price": "price", "sale_date": "saledt", "class": "class"}, "calc": {"valid_sale": ["?", True], "vacant_sale": ["?", False]}}}},
+        "modeling": {"model_groups": {}},
+    })
+    monkeypatch.setattr(harness, "_save_settings", lambda loc, s: None)
+    monkeypatch.setattr(harness, "_seed_path", lambda loc: tmp_path / "seed.json")
+
+    data_dir = tmp_path / "data" / locality
+    (data_dir / "out").mkdir(parents=True)
+    monkeypatch.setattr(harness, "_locality_data_dir", lambda loc: data_dir)
+
+    monkeypatch.setattr(
+        "profile_data.build_data_profile",
+        lambda *a, **kw: {"column_profiles": {}, "jurisdiction_tier": "rural_small"},
+    )
+
+    def fake_validate(settings, dp):
+        call_order.append(("validate", "validate_field_mapping"))
+        return {"errors": [], "warnings": []}
+
+    monkeypatch.setattr(
+        "validate_field_mapping.validate_field_mapping",
+        fake_validate,
+    )
+    monkeypatch.setattr(
+        "claude_settings.generate_initial",
+        lambda *a, **kw: {"modeling": {"model_groups": {}}},
+    )
+
+    harness.run_configure(locality, verbose=False)
+
+    # Find positions
+    configure_pos = next(i for i, (t, n) in enumerate(call_order) if n == "configure_settings.py")
+    validate_pos = next(i for i, (t, n) in enumerate(call_order) if n == "validate_field_mapping")
+    assert configure_pos < validate_pos, "configure_settings.py must run before field validation"
