@@ -694,6 +694,10 @@ def calc_correlations(
     while True:
         naive_corr = corr_full.loc[remaining, remaining]
 
+        if naive_corr.shape[1] < 2:
+            # Need at least a target column + one predictor to correlate
+            break
+
         # --- NEW: compute one explicit order and apply to both axes
         order = _order_by_target_corr(naive_corr, target_col=naive_corr.columns[0])
         naive_corr = naive_corr.loc[order, order]
@@ -736,6 +740,10 @@ def calc_correlations(
     # drop all other variables that are more correlated with current_variable than
     # they are with the target.
     # ------------------------------------------------------------------
+    if len(remaining) < 2:
+        # Not enough variables to compute meaningful correlations
+        return {"initial": first_run, "final": pd.DataFrame(columns=["variable", "corr_strength", "corr_clarity", "corr_score"]), "bad_vars": bad_vars}
+
     target_col = remaining[0]
 
     # process in descending strength-to-target order (excluding target itself)
