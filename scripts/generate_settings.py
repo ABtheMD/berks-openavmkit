@@ -23,6 +23,7 @@ import argparse
 import json
 import sys
 from difflib import get_close_matches
+from datetime import datetime
 from pathlib import Path
 
 try:
@@ -362,10 +363,9 @@ def build_settings(
         },
         "modeling": {
             "metadata": {
-                "__fill_in": "Replace the empty strings below before running the pipeline.",
-                "modeler":       "",
-                "modeler_nick":  "",
-                "valuation_date": "",
+                "modeler":        locality.get("name", ""),
+                "modeler_nick":   locality.get("name", "").split()[0] if locality.get("name") else "",
+                "valuation_date": f"{datetime.now().year}-01-01",
                 "use_sales_from":  2020,
                 "test_sales_from": 2024,
             },
