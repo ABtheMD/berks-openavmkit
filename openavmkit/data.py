@@ -997,6 +997,8 @@ def get_train_test_keys(df_in: pd.DataFrame, settings: dict):
     for model_group in model_group_ids:
         # Read the split keys for the model group
         test_keys, train_keys = _read_split_keys(model_group)
+        if test_keys is None or train_keys is None:
+            continue
 
         # Filter the DataFrame based on the keys
         mask_test |= df_in["key_sale"].isin(test_keys)
@@ -1037,6 +1039,8 @@ def get_train_test_masks(df_in: pd.DataFrame, settings: dict):
     for model_group in model_group_ids:
         # Read the split keys for the model group
         test_keys, train_keys = _read_split_keys(model_group)
+        if test_keys is None or train_keys is None:
+            continue
 
         # Filter the DataFrame based on the keys
         mask_test |= df_in["key_sale"].isin(test_keys)
@@ -4635,8 +4639,9 @@ def _read_split_keys(model_group: str):
     train_path = f"{path}/train_keys.csv"
     test_path = f"{path}/test_keys.csv"
     if not os.path.exists(train_path) or not os.path.exists(test_path):
-        warnings.warn(f"Model group:{model_group}")
-        raise ValueError("No split keys found.")
+        warnings.warn(f"Model group '{model_group}': no train/test split keys found at {path}. "
+                       "This group may have too few sales for splitting.")
+        return None, None
     train_keys = pd.read_csv(train_path)["key_sale"].astype(str).values
     test_keys = pd.read_csv(test_path)["key_sale"].astype(str).values
     return test_keys, train_keys

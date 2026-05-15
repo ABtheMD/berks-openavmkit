@@ -1301,6 +1301,9 @@ def run_one_model(
 
     if test_keys is None or train_keys is None:
         test_keys, train_keys = _read_split_keys(model_group)
+    if test_keys is None or train_keys is None:
+        warnings.warn(f"Skipping model '{model_name}' for group '{model_group}': no split keys available.")
+        return None
     t.stop("setup")
 
     t.start("data split")
@@ -2293,6 +2296,9 @@ def _optimize_ensemble_allocation(
         df_sales = all_results.df_sales_orig
 
     test_keys, train_keys = _read_split_keys(model_group)
+    if test_keys is None or train_keys is None:
+        warnings.warn(f"Skipping ensemble for group '{model_group}': no split keys available.")
+        return None
 
     ds = DataSplit(
         "ensemble",
@@ -3157,6 +3163,9 @@ def _prepare_ds(
     dep_var_test = instructions.get("dep_var_test", "sale_price_time_adj")
 
     test_keys, train_keys = _read_split_keys(model_group)
+    if test_keys is None or train_keys is None:
+        warnings.warn(f"Skipping outlier identification for group '{model_group}': no split keys available.")
+        return df_in
 
     ds = DataSplit(
         name=name,
@@ -4148,6 +4157,8 @@ def _trim_hedonic_sales(
     verbose: bool = False
 ):
     test_keys, train_keys = _read_split_keys(model_group)
+    if test_keys is None or train_keys is None:
+        return df_sales  # No split available, return unmodified
     rng = np.random.default_rng(random_seed)
 
     all_vac_keys = df_sales.loc[df_sales["vacant_sale"], "key_sale"]
