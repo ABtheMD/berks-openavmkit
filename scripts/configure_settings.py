@@ -53,6 +53,11 @@ GEO_ROLE = "geo_parcels"
 
 VALID_SALE_MAX = 50_000_000  # $50M upper cap for valid sales
 
+BLDG_VALUE_PATTERNS = [
+    "valubldg", "bldg_value", "buildingvalue", "bldgval",
+    "improvvalue", "improv_value", "imprvalue",
+]
+
 # Values larger than this in a numeric column strongly suggest Unix ms (not seconds)
 _MS_THRESHOLD = 1e10  # ~317 years in seconds; any real date > 1970 in ms exceeds this
 
@@ -220,10 +225,9 @@ def build_sales_calcs(sale_price_canonical: str = "sale_price") -> dict:
     """
     Calc operations added to the sales source's load entry.
 
-    key_sale  = str(key) + "_" + str(sale_date)   — unique sale transaction id
-    valid_sale = sale_price > 0 AND sale_price < VALID_SALE_MAX
-    vacant_sale = sale_price < 0                   — always False for normal data;
-                  user should refine if vacancy data is available
+    key_sale   = str(key) + "_" + str(sale_date)   — unique sale transaction id
+    valid_sale = sale_price > 1000 AND sale_price < VALID_SALE_MAX
+    vacant_sale = bldg_value == 0  — parcel has no building value
     """
     return {
         "key_sale": [
@@ -234,11 +238,11 @@ def build_sales_calcs(sale_price_canonical: str = "sale_price") -> dict:
         "valid_sale": [
             "?",
             ["and",
-             [">", sale_price_canonical, 0],
+             [">", sale_price_canonical, 1000],
              ["<", sale_price_canonical, VALID_SALE_MAX]],
         ],
         "vacant_sale": [
-            "?", ["<", sale_price_canonical, 0]
+            "?", ["==", "bldg_value", 0]
         ],
     }
 
@@ -253,7 +257,7 @@ def build_merge(
     Build data.process.merge.universe and data.process.merge.sales.
 
     Universe: geo_parcels base + left-join each other source on 'key'.
-    Sales:    sales_handle only, joined on 'key_sale'.
+    Sales:    sales_handle on 'key_sale' + any cama_residential sources on 'key'.
     """
     universe = [geo_handle]
     for source in sources:
@@ -263,6 +267,13 @@ def build_merge(
         universe.append({"id": handle, "how": "left", "on": "key"})
 
     sales = [{"id": sales_handle, "how": "left", "on": "key_sale"}]
+    for source in sources:
+        handle = source["handle"]
+        role = source.get("role", "")
+        if handle == sales_handle or handle == geo_handle or handle not in schemas:
+            continue
+        if role == "cama_residential":
+            sales.append({"id": handle, "how": "left", "on": "key"})
 
     return {"universe": universe, "sales": sales}
 
@@ -391,7 +402,15 @@ def main():
         print(f"  {handle}: {len(load_map)} fields mapped  (key={parcel_id_col})")
 
         if is_sales:
+            bldg_col = detect_column(cols, BLDG_VALUE_PATTERNS)
+            if bldg_col and "bldg_value" not in load_map:
+                load_map["bldg_value"] = bldg_col
+                print(f"    + bldg_value mapped from: {bldg_col}")
+
             calcs = build_sales_calcs("sale_price")
+            if not bldg_col and "bldg_value" not in load_map:
+                calcs["vacant_sale"] = ["?", False]
+                print(f"  WARNING: bldg_value not found in {handle} — vacant_sale defaulting to False")
             entry["calc"] = calcs
             print(f"    + calc: key_sale, valid_sale, vacant_sale")
 
@@ -403,6 +422,8 @@ def main():
         if "process" not in settings["data"]:
             settings["data"]["process"] = {}
         settings["data"]["process"]["merge"] = merge
+        if "time_adjustment" not in settings["data"]["process"]:
+            settings["data"]["process"]["time_adjustment"] = {"period": "Y"}
 
         univ_len = len(merge["universe"])
         print(f"  universe: {univ_len} sources  ({merge['universe'][0]} + {univ_len-1} left-joins)")

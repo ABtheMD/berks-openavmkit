@@ -23,6 +23,7 @@ import argparse
 import json
 import sys
 from difflib import get_close_matches
+from datetime import datetime
 from pathlib import Path
 
 try:
@@ -362,10 +363,9 @@ def build_settings(
         },
         "modeling": {
             "metadata": {
-                "__fill_in": "Replace the empty strings below before running the pipeline.",
-                "modeler":       "",
-                "modeler_nick":  "",
-                "valuation_date": "",
+                "modeler":        locality.get("name", ""),
+                "modeler_nick":   locality.get("name", "").split()[0] if locality.get("name") else "",
+                "valuation_date": f"{datetime.now().year}-01-01",
                 "use_sales_from":  2020,
                 "test_sales_from": 2024,
             },
@@ -511,7 +511,7 @@ Examples:
 
     print(
         "\n  Next steps:\n"
-        "    1. Fill in  modeling.metadata.modeler, modeler_nick, valuation_date\n"
+        "    1. Review   modeling.metadata (modeler, modeler_nick, valuation_date auto-filled)\n"
         "    2. Define   modeling.model_groups for your property types (use str: prefix for string literals in filters)\n"
         "    3. Complete field_classification.important.fields with your column names\n"
         "    4. Review   models.default.dep_vars — keep only meaningful predictors\n"
