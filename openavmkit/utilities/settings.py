@@ -595,7 +595,7 @@ def get_model_group_ids(settings: dict, df: pd.DataFrame = None) -> list[str]:
 
     if df is not None:
         # If a dataframe is provided, filter out model groups that are not present in the DataFrame
-        model_groups_in_df = df["model_group"].unique()
+        model_groups_in_df = df["model_group"].dropna().unique()
         model_group_ids = [key for key in model_groups if key in model_groups_in_df]
     else:
         model_group_ids = [key for key in model_groups]
