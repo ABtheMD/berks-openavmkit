@@ -406,10 +406,11 @@ def main():
             if bldg_col and "bldg_value" not in load_map:
                 load_map["bldg_value"] = bldg_col
                 print(f"    + bldg_value mapped from: {bldg_col}")
-            elif not bldg_col:
-                print(f"  WARNING: no building value column found in {handle} for vacant_sale calc")
 
             calcs = build_sales_calcs("sale_price")
+            if not bldg_col and "bldg_value" not in load_map:
+                calcs["vacant_sale"] = ["?", False]
+                print(f"  WARNING: bldg_value not found in {handle} — vacant_sale defaulting to False")
             entry["calc"] = calcs
             print(f"    + calc: key_sale, valid_sale, vacant_sale")
 
@@ -421,7 +422,8 @@ def main():
         if "process" not in settings["data"]:
             settings["data"]["process"] = {}
         settings["data"]["process"]["merge"] = merge
-        settings["data"]["process"]["time_adjustment"] = {"period": "Y"}
+        if "time_adjustment" not in settings["data"]["process"]:
+            settings["data"]["process"]["time_adjustment"] = {"period": "Y"}
 
         univ_len = len(merge["universe"])
         print(f"  universe: {univ_len} sources  ({merge['universe'][0]} + {univ_len-1} left-joins)")
