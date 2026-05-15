@@ -391,17 +391,16 @@ def try_variables(
             print(f"model group: {model_group} / {vacant_status}")
             results = entry[vacant_status]
             report = report_entry[vacant_status]
-            results = results[~results["corr_strength"].isna()]
+            if "corr_strength" in results.columns:
+                results = results[~results["corr_strength"].isna()]
 
-            styled = results.style.format(
-                {
-                    "corr_strength": "{:,.2f}",
-                    "corr_clarity": "{:,.2f}",
-                    "corr_score": "{:,.2f}",
-                    "r2": "{:,.2f}",
-                    "adj_r2": "{:,.2f}",
-                    "coef_sign": "{:,.0f}"
-                }
+            format_dict = {}
+            for col, fmt in [("corr_strength", "{:,.2f}"), ("corr_clarity", "{:,.2f}"),
+                             ("corr_score", "{:,.2f}"), ("r2", "{:,.2f}"),
+                             ("adj_r2", "{:,.2f}"), ("coef_sign", "{:,.0f}")]:
+                if col in results.columns:
+                    format_dict[col] = fmt
+            styled = results.style.format(format_dict
             )
 
             pd.set_option("display.max_rows", None)
@@ -587,14 +586,18 @@ def get_variable_recommendations(
     # Remove bad variables
     ind_vars = [var for var in ds.ind_vars if var not in bad_vars]
     
-    if "corr" in tests_to_run:
+    if "corr" in tests_to_run and len(ind_vars) > 0:
         # Correlation
         X_corr = ds.df_sales[[ds.dep_var] + ind_vars]
         t.start("variables.corr")
         corr_results = calc_correlations(X_corr, thresh.get("correlation", 0.1), do_plots=do_plots)
-        
+
         # Remove bad variables
         ind_vars = [var for var in ds.ind_vars if var not in corr_results["bad_vars"]]
+
+        # If correlation produced no meaningful results, treat as if not run
+        if corr_results["final"].empty:
+            corr_results = None
         t.stop("variables.corr")
     else:
         corr_results = None
@@ -1298,6 +1301,9 @@ def run_one_model(
 
     if test_keys is None or train_keys is None:
         test_keys, train_keys = _read_split_keys(model_group)
+    if test_keys is None or train_keys is None:
+        warnings.warn(f"Skipping model '{model_name}' for group '{model_group}': no split keys available.")
+        return None
     t.stop("setup")
 
     t.start("data split")
@@ -2290,6 +2296,9 @@ def _optimize_ensemble_allocation(
         df_sales = all_results.df_sales_orig
 
     test_keys, train_keys = _read_split_keys(model_group)
+    if test_keys is None or train_keys is None:
+        warnings.warn(f"Skipping ensemble for group '{model_group}': no split keys available.")
+        return None
 
     ds = DataSplit(
         "ensemble",
@@ -3154,6 +3163,9 @@ def _prepare_ds(
     dep_var_test = instructions.get("dep_var_test", "sale_price_time_adj")
 
     test_keys, train_keys = _read_split_keys(model_group)
+    if test_keys is None or train_keys is None:
+        warnings.warn(f"Skipping outlier identification for group '{model_group}': no split keys available.")
+        return df_in
 
     ds = DataSplit(
         name=name,
@@ -3332,6 +3344,8 @@ def _calc_variable_recommendations(
 
         for state in ["initial", "final"]:
             # Correlation:
+            if correlation_results is None:
+                continue
             dfr_corr = correlation_results[state][corr_fields].copy()
             dfr_corr["Pass/Fail"] = dfr_corr["corr_score"].apply(
                 lambda x: "✅" if x > thresh_corr else "❌"
@@ -4143,6 +4157,8 @@ def _trim_hedonic_sales(
     verbose: bool = False
 ):
     test_keys, train_keys = _read_split_keys(model_group)
+    if test_keys is None or train_keys is None:
+        return df_sales  # No split available, return unmodified
     rng = np.random.default_rng(random_seed)
 
     all_vac_keys = df_sales.loc[df_sales["vacant_sale"], "key_sale"]

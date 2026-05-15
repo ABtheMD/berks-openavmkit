@@ -694,6 +694,10 @@ def calc_correlations(
     while True:
         naive_corr = corr_full.loc[remaining, remaining]
 
+        if naive_corr.shape[1] < 2:
+            # Need at least a target column + one predictor to correlate
+            break
+
         # --- NEW: compute one explicit order and apply to both axes
         order = _order_by_target_corr(naive_corr, target_col=naive_corr.columns[0])
         naive_corr = naive_corr.loc[order, order]
@@ -736,6 +740,11 @@ def calc_correlations(
     # drop all other variables that are more correlated with current_variable than
     # they are with the target.
     # ------------------------------------------------------------------
+    if len(remaining) < 2:
+        # Not enough variables to compute meaningful correlations
+        empty_df = pd.DataFrame(columns=["variable", "corr_strength", "corr_clarity", "corr_score"])
+        return {"initial": first_run if first_run is not None else empty_df, "final": empty_df, "bad_vars": bad_vars}
+
     target_col = remaining[0]
 
     # process in descending strength-to-target order (excluding target itself)
@@ -1457,10 +1466,18 @@ def calc_vif(X: pd.DataFrame) -> pd.DataFrame:
         warnings.warn("Can't calculate VIF for one column")
         vif_data["vif"] = [float("nan")] * len(X.columns)
         return vif_data
-    
+
+    # Drop rows with inf or NaN values — statsmodels OLS requires clean data
+    X_clean = X.replace([np.inf, -np.inf], np.nan).dropna()
+
+    if len(X_clean) < 5:
+        warnings.warn("Can't calculate VIF: fewer than 5 clean rows after dropping inf/NaN")
+        vif_data["vif"] = [float("nan")] * len(X.columns)
+        return vif_data
+
     # Calculate VIF for each column
     vif_data["vif"] = [
-        variance_inflation_factor(X.values, i) for i in range(X.shape[1])
+        variance_inflation_factor(X_clean.values, i) for i in range(X_clean.shape[1])
     ]
 
     return vif_data

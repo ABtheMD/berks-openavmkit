@@ -404,14 +404,23 @@ def _fill_unknown_values_per_model_group(df_in: pd.DataFrame, settings: dict):
         # Restore original dtypes before assigning back. The fill logic
         # can change column dtypes (e.g. a Float64 column misclassified
         # as categorical gets converted to string with "UNKNOWN" fill).
-        # For numeric columns, non-numeric fill values become NA.
+        # Only use pd.to_numeric for numeric target dtypes; for non-numeric
+        # targets (object, string, category) use direct astype to avoid
+        # destroying valid string values.
         for col in df_mg.columns:
             if col in df.columns and df_mg[col].dtype != df[col].dtype:
-                try:
-                    df_mg[col] = pd.to_numeric(df_mg[col], errors="coerce").astype(df[col].dtype)
-                except (ValueError, TypeError):
+                target_dtype = df[col].dtype
+                if pd.api.types.is_numeric_dtype(target_dtype):
                     try:
-                        df_mg[col] = df_mg[col].astype(df[col].dtype)
+                        df_mg[col] = pd.to_numeric(df_mg[col], errors="coerce").astype(target_dtype)
+                    except (ValueError, TypeError):
+                        try:
+                            df_mg[col] = df_mg[col].astype(target_dtype)
+                        except (ValueError, TypeError):
+                            pass
+                else:
+                    try:
+                        df_mg[col] = df_mg[col].astype(target_dtype)
                     except (ValueError, TypeError):
                         pass
         try:

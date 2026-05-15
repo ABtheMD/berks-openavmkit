@@ -2012,6 +2012,11 @@ def _run_multi_mra(
                     X_loc = X_train.loc[mask_loc, :]
                     y_loc = y_train.loc[mask_loc]
 
+                    # Clean inf/NaN before optimization
+                    mask_opt_clean = np.isfinite(X_loc).all(axis=1) & np.isfinite(y_loc)
+                    X_loc = X_loc.loc[mask_opt_clean]
+                    y_loc = y_loc.loc[mask_opt_clean]
+
                     n_loc = len(X_loc)
                     min_n_loc = X_loc.shape[1] + 1
                     if n_loc < min_n_loc:
@@ -2044,7 +2049,21 @@ def _run_multi_mra(
     # ------------------------
     # Global OLS (fallback)
     # ------------------------
-    global_model = sm.OLS(y_train, X_train).fit()
+    # Clean inf/NaN from training data before OLS — statsmodels requires clean data
+    mask_clean = np.isfinite(X_train).all(axis=1) & np.isfinite(y_train)
+    X_train_clean = X_train.loc[mask_clean]
+    y_train_clean = y_train.loc[mask_clean]
+
+    if len(X_train_clean) < len(feature_names) + 1:
+        raise ValueError(
+            f"[Multi-MRA] After removing inf/NaN rows, only {len(X_train_clean)} "
+            f"observations remain (need at least {len(feature_names) + 1})."
+        )
+
+    if verbose and len(X_train_clean) < len(X_train):
+        print(f"[Multi-MRA] Dropped {len(X_train) - len(X_train_clean)} rows with inf/NaN from training data.")
+
+    global_model = sm.OLS(y_train_clean, X_train_clean).fit()
     global_coef = global_model.params.reindex(feature_names, fill_value=0.0).to_numpy(dtype=float)
 
     if verbose:
@@ -2099,10 +2118,18 @@ def _run_multi_mra(
                 # Not enough observations for a stable local regression
                 continue
 
+            # Clean inf/NaN from local subset before OLS
+            mask_loc_clean = np.isfinite(X_loc).all(axis=1) & np.isfinite(y_loc)
+            X_loc = X_loc.loc[mask_loc_clean]
+            y_loc = y_loc.loc[mask_loc_clean]
+
+            if len(X_loc) < min_n_loc:
+                continue
+
             # Fit local OLS; catch linear algebra issues
             try:
                 local_model = sm.OLS(y_loc, X_loc).fit()
-            except np.linalg.LinAlgError:
+            except (np.linalg.LinAlgError, Exception):
                 # Singular / ill-conditioned; skip this loc
                 continue
 
@@ -2249,9 +2276,11 @@ def predict_multi_mra(
 
                 # Select the subset of X corresponding to this location
                 X_loc = X_split.loc[mask_loc, feature_names]
-                
+
                 # Compute predictions: X_loc @ beta
-                y_loc_pred = X_loc.to_numpy().dot(beta)
+                # Convert to float64 numpy, replacing pd.NA/NaN with np.nan
+                X_loc_np = X_loc.to_numpy(dtype="float64", na_value=np.nan)
+                y_loc_pred = X_loc_np.dot(beta)
                 
                 # Select the subset of ground truth for this location
                 if y_split is not None:
@@ -2267,7 +2296,7 @@ def predict_multi_mra(
         mask_global = np.isnan(y_pred)
         if mask_global.any():
             X_global = X_split.loc[mask_global, feature_names]
-            y_pred[mask_global] = X_global.to_numpy().dot(global_coef)
+            y_pred[mask_global] = X_global.to_numpy(dtype="float64", na_value=np.nan).dot(global_coef)
 
         return y_pred
 
@@ -6034,6 +6063,34 @@ def write_local_area_params(
     df_params.to_csv(params_path, index=False)
 
 
+def _strip_nullable_dtypes(df: pd.DataFrame) -> pd.DataFrame:
+    """Build a brand-new DataFrame from numpy arrays, stripping nullable dtypes.
+
+    Pandas DataFrames with nullable extension dtypes (Float64, Int64, boolean)
+    store missing values as ``pd.NA`` instead of ``np.nan``.  CatBoost / XGBoost
+    cannot handle ``pd.NA`` and crash when creating an internal Pool.
+
+    Column-by-column assignment (``df[col] = arr``) is unreliable: pandas may
+    silently re-infer the original nullable dtype when the target DataFrame was
+    created from a nullable source.  Constructing a **new** DataFrame from a
+    dict of raw numpy arrays guarantees standard numpy-backed columns.
+    """
+    new_data: dict = {}
+    for col in df.columns:
+        series = df[col]
+        dname = series.dtype.name
+        if dname in ("string", "category", "object"):
+            # Keep non-numeric columns as-is (values are already object arrays)
+            new_data[col] = series.values
+        elif hasattr(series.dtype, "na_value"):
+            # Nullable extension dtype -> numpy float64, pd.NA -> np.nan
+            new_data[col] = series.to_numpy(dtype="float64", na_value=np.nan)
+        else:
+            # Already numpy-backed, copy for safety
+            new_data[col] = series.to_numpy(copy=True)
+    return pd.DataFrame(new_data)
+
+
 def write_shaps(
     model: TreeBasedModel,
     outpath: str,
@@ -6043,24 +6100,33 @@ def write_shaps(
     verbose: bool = False
 ):
     ind_vars = smr.ds.ind_vars
-    
+
     ind_vars_train = [v for v in ind_vars if v in smr.df_train.columns]
     ind_vars_test = [v for v in ind_vars if v in smr.df_test.columns]
     ind_vars_sales = [v for v in ind_vars if v in smr.df_sales.columns]
     ind_vars_univ = [v for v in ind_vars if v in smr.df_universe.columns]
-    
+
     ind_vars_by_subset = {
         "train": ind_vars_train,
         "test" : ind_vars_test,
         "sales": ind_vars_sales,
         "univ" : ind_vars_univ
     }
-    
+
     X_train = smr.df_train[ind_vars_train].copy()
     X_test = smr.df_test[ind_vars_test].copy()
     X_sales = smr.df_sales[ind_vars_sales].copy()
     X_univ = smr.df_universe[ind_vars_univ].copy()
-    
+
+    # Strip nullable pandas dtypes (Float64/Int64/boolean with pd.NA) by
+    # rebuilding each DataFrame from numpy arrays.  Column-by-column
+    # assignment (df[col] = arr) does NOT work reliably: pandas may
+    # re-infer nullable extension dtypes on the original DataFrame.
+    X_train = _strip_nullable_dtypes(X_train)
+    X_test  = _strip_nullable_dtypes(X_test)
+    X_sales = _strip_nullable_dtypes(X_sales)
+    X_univ  = _strip_nullable_dtypes(X_univ)
+
     shaps = get_full_model_shaps(
         model,
         X_train,
@@ -6141,6 +6207,10 @@ def _prepare_shap_dfs(
     elif isinstance(model, CatBoostModel) or isinstance(model, XGBoostModel):
         predictor = model.regressor
     
+    # First, strip nullable extension dtypes (Float64/Int64/boolean -> float64)
+    # BEFORE the cat_data branch so both paths start from numpy-backed columns.
+    X_to_explain = _strip_nullable_dtypes(X_to_explain)
+
     cat_data = model.cat_data
     if cat_data is not None and len(cat_data.categorical_cols) > 0:
         # apply dtype enforcement but stay within list_vars, not full feature_names
@@ -6152,9 +6222,13 @@ def _prepare_shap_dfs(
                 X_to_explain[c] = pd.Categorical(X_to_explain[c], categories=levels)
                 if isinstance(model, CatBoostModel):
                     X_to_explain[c] = X_to_explain[c].astype("string").fillna("__MISSING__")
+        # Re-strip: cat_data handling re-introduces "boolean" (nullable) dtype
+        X_to_explain = _strip_nullable_dtypes(X_to_explain)
     else:
+        # All columns are numeric — safe to convert to numpy now that
+        # nullable dtypes have already been stripped above.
         X_to_explain = X_to_explain.to_numpy()
-    
+
     yhat_raw = predictor.predict(X_to_explain)
 
     ## SHAP reconstruction on those rows
