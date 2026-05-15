@@ -511,7 +511,7 @@ Examples:
 
     print(
         "\n  Next steps:\n"
-        "    1. Fill in  modeling.metadata.modeler, modeler_nick, valuation_date\n"
+        "    1. Review   modeling.metadata (modeler, modeler_nick, valuation_date auto-filled)\n"
         "    2. Define   modeling.model_groups for your property types (use str: prefix for string literals in filters)\n"
         "    3. Complete field_classification.important.fields with your column names\n"
         "    4. Review   models.default.dep_vars — keep only meaningful predictors\n"
