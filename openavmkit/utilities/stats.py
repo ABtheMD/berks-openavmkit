@@ -1466,10 +1466,18 @@ def calc_vif(X: pd.DataFrame) -> pd.DataFrame:
         warnings.warn("Can't calculate VIF for one column")
         vif_data["vif"] = [float("nan")] * len(X.columns)
         return vif_data
-    
+
+    # Drop rows with inf or NaN values — statsmodels OLS requires clean data
+    X_clean = X.replace([np.inf, -np.inf], np.nan).dropna()
+
+    if len(X_clean) < 5:
+        warnings.warn("Can't calculate VIF: fewer than 5 clean rows after dropping inf/NaN")
+        vif_data["vif"] = [float("nan")] * len(X.columns)
+        return vif_data
+
     # Calculate VIF for each column
     vif_data["vif"] = [
-        variance_inflation_factor(X.values, i) for i in range(X.shape[1])
+        variance_inflation_factor(X_clean.values, i) for i in range(X_clean.shape[1])
     ]
 
     return vif_data
