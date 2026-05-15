@@ -391,17 +391,16 @@ def try_variables(
             print(f"model group: {model_group} / {vacant_status}")
             results = entry[vacant_status]
             report = report_entry[vacant_status]
-            results = results[~results["corr_strength"].isna()]
+            if "corr_strength" in results.columns:
+                results = results[~results["corr_strength"].isna()]
 
-            styled = results.style.format(
-                {
-                    "corr_strength": "{:,.2f}",
-                    "corr_clarity": "{:,.2f}",
-                    "corr_score": "{:,.2f}",
-                    "r2": "{:,.2f}",
-                    "adj_r2": "{:,.2f}",
-                    "coef_sign": "{:,.0f}"
-                }
+            format_dict = {}
+            for col, fmt in [("corr_strength", "{:,.2f}"), ("corr_clarity", "{:,.2f}"),
+                             ("corr_score", "{:,.2f}"), ("r2", "{:,.2f}"),
+                             ("adj_r2", "{:,.2f}"), ("coef_sign", "{:,.0f}")]:
+                if col in results.columns:
+                    format_dict[col] = fmt
+            styled = results.style.format(format_dict
             )
 
             pd.set_option("display.max_rows", None)
