@@ -401,6 +401,19 @@ def _fill_unknown_values_per_model_group(df_in: pd.DataFrame, settings: dict):
             df_mg = df[df["model_group"].eq(model_group)].copy()
         df_mg = _fill_unknown_values(df_mg, settings)
         df, df_mg = align_categories(df, df_mg)
+        # Restore original dtypes before assigning back. The fill logic
+        # can change column dtypes (e.g. a Float64 column misclassified
+        # as categorical gets converted to string with "UNKNOWN" fill).
+        # For numeric columns, non-numeric fill values become NA.
+        for col in df_mg.columns:
+            if col in df.columns and df_mg[col].dtype != df[col].dtype:
+                try:
+                    df_mg[col] = pd.to_numeric(df_mg[col], errors="coerce").astype(df[col].dtype)
+                except (ValueError, TypeError):
+                    try:
+                        df_mg[col] = df_mg[col].astype(df[col].dtype)
+                    except (ValueError, TypeError):
+                        pass
         try:
             df.loc[df_mg.index, :] = df_mg
         except:
@@ -494,7 +507,7 @@ def _fill_unknown_values(df, settings: dict):
     if cat_fields is not None:
         for field in cat_fields:
             if field in df:
-                df[field] = df[field].astype("str")
+                df[field] = df[field].astype("string")
                 df[field] = df[field].fillna("UNKNOWN")
 
     if bool_fields is not None:
