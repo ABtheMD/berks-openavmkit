@@ -349,6 +349,11 @@ def try_variables(
                 verbose=verbose,
             )
 
+            if var_recs is None:
+                if verbose:
+                    print(f"Skipping variable recommendations for {model_group} (no splits).")
+                continue
+
             best_variables = var_recs["variables"]
             df_results = var_recs["df_results"]
             report = var_recs["report"]
@@ -391,17 +396,16 @@ def try_variables(
             print(f"model group: {model_group} / {vacant_status}")
             results = entry[vacant_status]
             report = report_entry[vacant_status]
-            results = results[~results["corr_strength"].isna()]
+            if "corr_strength" in results.columns:
+                results = results[~results["corr_strength"].isna()]
 
-            styled = results.style.format(
-                {
-                    "corr_strength": "{:,.2f}",
-                    "corr_clarity": "{:,.2f}",
-                    "corr_score": "{:,.2f}",
-                    "r2": "{:,.2f}",
-                    "adj_r2": "{:,.2f}",
-                    "coef_sign": "{:,.0f}"
-                }
+            format_dict = {}
+            for col, fmt in [("corr_strength", "{:,.2f}"), ("corr_clarity", "{:,.2f}"),
+                             ("corr_score", "{:,.2f}"), ("r2", "{:,.2f}"),
+                             ("adj_r2", "{:,.2f}"), ("coef_sign", "{:,.0f}")]:
+                if col in results.columns:
+                    format_dict[col] = fmt
+            styled = results.style.format(format_dict
             )
 
             pd.set_option("display.max_rows", None)
@@ -493,7 +497,11 @@ def get_variable_recommendations(
     entry: dict | None = model_entries.get("model", model_entries.get("default", {}))
     if variables_to_use is None:
         variables_to_use: list | None = entry.get("ind_vars", None)
-    
+
+    if variables_to_use is None or len(variables_to_use) == 0:
+        # Fall back to try_variables candidate list when ind_vars is not defined
+        variables_to_use = settings_model.get("try_variables", {}).get("variables", None)
+
     if variables_to_use is None or len(variables_to_use) == 0:
         raise ValueError("No independent variables provided! Please define some!")
     
@@ -561,6 +569,8 @@ def get_variable_recommendations(
         "var_recs", df_sales, df_universe, model_group, vacant_only, settings, variables_to_use
     )
     t.stop("variables.prepare_ds")
+    if ds is None:
+        return None
     t.start("variables.one_hot")
     ds = ds.encode_categoricals_with_one_hot()
     t.stop("variables.one_hot")
@@ -587,14 +597,18 @@ def get_variable_recommendations(
     # Remove bad variables
     ind_vars = [var for var in ds.ind_vars if var not in bad_vars]
     
-    if "corr" in tests_to_run:
+    if "corr" in tests_to_run and len(ind_vars) > 0:
         # Correlation
         X_corr = ds.df_sales[[ds.dep_var] + ind_vars]
         t.start("variables.corr")
         corr_results = calc_correlations(X_corr, thresh.get("correlation", 0.1), do_plots=do_plots)
-        
+
         # Remove bad variables
         ind_vars = [var for var in ds.ind_vars if var not in corr_results["bad_vars"]]
+
+        # If correlation produced no meaningful results, treat as if not run
+        if corr_results["final"].empty:
+            corr_results = None
         t.stop("variables.corr")
     else:
         corr_results = None
@@ -1046,7 +1060,9 @@ def write_out_all_results(sup: SalesUniversePair, all_results: dict):
         df_univ.to_csv(f"{outpath}/universe.csv", index=False)
         t.stop("csv")
         t.start("parquet")
-        df_univ.to_parquet(f"{outpath}/universe.parquet", engine="pyarrow")
+        from openavmkit.utilities._utils import sanitize_df
+        df_univ_safe = sanitize_df(df_univ)
+        df_univ_safe.to_parquet(f"{outpath}/universe.parquet", engine="pyarrow")
         t.stop("parquet")
 
 
@@ -1279,11 +1295,17 @@ def run_one_model(
 
     are_ind_vars_default = entry.get("ind_vars", None) is None
     ind_vars: list | None = entry.get("ind_vars", default_entry.get("ind_vars", None))
- 
+
+    if not ind_vars:
+        # Fall back to try_variables candidate list when ind_vars is empty or None
+        ind_vars = settings.get("modeling", {}).get("try_variables", {}).get("variables", None)
+        are_ind_vars_default = True
+
+    if not ind_vars:
+        raise ValueError(f"ind_vars not found for model {model_name}")
+
     # no duplicates!
     ind_vars = list(set(ind_vars))
-    if ind_vars is None:
-        raise ValueError(f"ind_vars not found for model {model_name}")
 
     if are_ind_vars_default:
         if (best_variables is not None) and (set(ind_vars) != set(best_variables)):
@@ -1298,6 +1320,9 @@ def run_one_model(
 
     if test_keys is None or train_keys is None:
         test_keys, train_keys = _read_split_keys(model_group)
+    if test_keys is None or train_keys is None:
+        warnings.warn(f"Skipping model '{model_name}' for group '{model_group}': no split keys available.")
+        return None
     t.stop("setup")
 
     t.start("data split")
@@ -2181,7 +2206,9 @@ def _write_model_results(results: SingleModelResults, outpath: str, settings: di
             df = gpd.GeoDataFrame(df, geometry="geometry", crs=getattr(df, "crs", None))
             df = ensure_geometries(df)
         
-        df.to_parquet(f"{path}/pred_{key}.parquet")
+        from openavmkit.utilities._utils import sanitize_df
+        df_safe = sanitize_df(df) if "geometry" not in df.columns else sanitize_df(df, geometry_col="geometry")
+        df_safe.to_parquet(f"{path}/pred_{key}.parquet")
         if "geometry" in df:
             df = df.drop(columns=["geometry"])
         df.to_csv(f"{path}/pred_{key}.csv", index=False)
@@ -2260,7 +2287,8 @@ def _write_ensemble_model_results(
             df = df_basic.merge(df_ensemble, on=merge_key, how="left")
         else:
             df = df_basic
-        df.to_parquet(f"{path}/pred_{key}.parquet")
+        from openavmkit.utilities._utils import sanitize_df
+        sanitize_df(df).to_parquet(f"{path}/pred_{key}.parquet")
         df.to_csv(f"{path}/pred_{key}.csv", index=False)
 
 
@@ -2290,6 +2318,9 @@ def _optimize_ensemble_allocation(
         df_sales = all_results.df_sales_orig
 
     test_keys, train_keys = _read_split_keys(model_group)
+    if test_keys is None or train_keys is None:
+        warnings.warn(f"Skipping ensemble for group '{model_group}': no split keys available.")
+        return None
 
     ds = DataSplit(
         "ensemble",
@@ -3154,6 +3185,9 @@ def _prepare_ds(
     dep_var_test = instructions.get("dep_var_test", "sale_price_time_adj")
 
     test_keys, train_keys = _read_split_keys(model_group)
+    if test_keys is None or train_keys is None:
+        warnings.warn(f"Skipping model group '{model_group}': no train/test split keys available.")
+        return None
 
     ds = DataSplit(
         name=name,
@@ -3332,6 +3366,8 @@ def _calc_variable_recommendations(
 
         for state in ["initial", "final"]:
             # Correlation:
+            if correlation_results is None:
+                continue
             dfr_corr = correlation_results[state][corr_fields].copy()
             dfr_corr["Pass/Fail"] = dfr_corr["corr_score"].apply(
                 lambda x: "✅" if x > thresh_corr else "❌"
@@ -4143,6 +4179,8 @@ def _trim_hedonic_sales(
     verbose: bool = False
 ):
     test_keys, train_keys = _read_split_keys(model_group)
+    if test_keys is None or train_keys is None:
+        return df_sales  # No split available, return unmodified
     rng = np.random.default_rng(random_seed)
 
     all_vac_keys = df_sales.loc[df_sales["vacant_sale"], "key_sale"]
@@ -4337,24 +4375,28 @@ def _run_models(
         else:
             model_variables = None
         
-        results = run_one_model(
-            df_sales=df_sales,
-            df_universe=df_univ,
-            vacant_only=vacant_only,
-            model_group=model_group,
-            model_name=model_name,
-            model_entries=model_entries,
-            settings=settings,
-            dep_var=dep_var,
-            dep_var_test=dep_var_test,
-            best_variables=model_variables,
-            fields_cat=fields_cat,
-            outpath=outpath,
-            save_params=save_params,
-            use_saved_params=use_saved_params,
-            save_results=save_results,
-            verbose=verbose,
-        )
+        try:
+            results = run_one_model(
+                df_sales=df_sales,
+                df_universe=df_univ,
+                vacant_only=vacant_only,
+                model_group=model_group,
+                model_name=model_name,
+                model_entries=model_entries,
+                settings=settings,
+                dep_var=dep_var,
+                dep_var_test=dep_var_test,
+                best_variables=model_variables,
+                fields_cat=fields_cat,
+                outpath=outpath,
+                save_params=save_params,
+                use_saved_params=use_saved_params,
+                save_results=save_results,
+                verbose=verbose,
+            )
+        except (ValueError, Exception) as e:
+            print(f"Could not generate results for model: {model_name} ({e})")
+            results = None
         if results is not None:
             model_results[model_name] = results
             any_results = True

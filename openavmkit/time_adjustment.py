@@ -61,6 +61,13 @@ def calculate_time_adjustment(
 
     df_sales = df_sales_in.copy()
 
+    # Ensure sale_year is numeric — hydration can leave it as string (e.g. '2023.0')
+    # which causes groupby in _crunch_time_adjustment to produce all-NaN medians.
+    if "sale_year" in df_sales.columns and not pd.api.types.is_numeric_dtype(df_sales["sale_year"]):
+        df_sales["sale_year"] = pd.to_numeric(df_sales["sale_year"], errors="coerce").astype("Float64")
+    if "sale_month" in df_sales.columns and not pd.api.types.is_numeric_dtype(df_sales["sale_month"]):
+        df_sales["sale_month"] = pd.to_numeric(df_sales["sale_month"], errors="coerce").astype("Float64")
+
     if "sale_quarter" not in df_sales.columns:
         df_sales["sale_quarter"] = (df_sales["sale_month"] - 1) // 3 + 1
         df_sales["sale_quarter"] = (
@@ -81,6 +88,10 @@ def calculate_time_adjustment(
     sale_field = f"sale_price_per_{per}_{unit}"
 
     df_per = df_sales[df_sales[sale_field].gt(0)]
+
+    if len(df_per) == 0:
+        warnings.warn("No sales with positive per-unit price; cannot compute time adjustment.")
+        return pd.DataFrame(columns=["period", "value"])
 
     # Determine the time resolution (Month, Quarter, Year) -- "M", "Q", or "Y":
     period = _determine_time_resolution(df_per, sale_field, min_sale_count, period)
@@ -202,6 +213,20 @@ def apply_time_adjustment_per_model_group(
         df_time = try_read_from_file
     else:
         df_time = calculate_time_adjustment(df_sales_in, settings, period, verbose)
+        if len(df_time) == 0:
+            # Not enough data for time adjustment — use unadjusted prices
+            warnings.warn(f"Model group '{model_group}': insufficient data for time adjustment; using unadjusted sale prices.")
+            df_sales["sale_price_time_adj"] = df_sales["sale_price"]
+            unit = area_unit(settings)
+            if f"sale_price_per_impr_{unit}" in df_sales:
+                df_sales[f"sale_price_time_adj_per_impr_{unit}"] = div_df_z_safe(
+                    df_sales, "sale_price_time_adj", f"bldg_area_finished_{unit}"
+                )
+            if f"sale_price_per_land_{unit}" in df_sales:
+                df_sales[f"sale_price_time_adj_per_land_{unit}"] = div_df_z_safe(
+                    df_sales, "sale_price_time_adj", f"land_area_{unit}"
+                )
+            return df_sales
         df_time = df_time.rename(columns={"value":"start_indexed"})
         df_time["end_indexed"] = df_time["start_indexed"]/df_time["start_indexed"].iloc[-1]
         df_time["correction_factor"] = 1 / df_time["end_indexed"]
@@ -276,8 +301,8 @@ def enrich_time_adjustment(
     # Gather settings
     ta = get_time_adjustment_instructions(settings)
 
-    # Apply time adjustment if necessary
-    if "sale_price_time_adj" not in df:
+    # Apply time adjustment if necessary (also recalculate if column exists but is all NaN)
+    if "sale_price_time_adj" not in df or df["sale_price_time_adj"].isna().all():
         if verbose:
             print("Applying time adjustment...")
         period = ta.get("period", "Q")
@@ -320,8 +345,10 @@ def _get_expected_periods(df: pd.DataFrame, period: str):
     # get the earliest and latest date:
     date_min: datetime = df["sale_date"].min()
     date_max: datetime = df["sale_date"].max()
-    min_year = date_min.year
-    max_year = date_max.year
+    if pd.isnull(date_min) or pd.isnull(date_max):
+        return []
+    min_year = int(date_min.year)
+    max_year = int(date_max.year)
     years = [year for year in range(min_year, max_year + 1)]
     periods = []
     if period == "Y":
@@ -521,6 +548,18 @@ def _determine_value_driver(df_in: pd.DataFrame, settings: dict):
     if len(df_impr) == 0 and len(df_land) == 0:
         warnings.warn("No positive values for both land and improvement, default to improved value driver")
         return "impr"
+
+    # If one driver has far too few records relative to the other, it cannot
+    # produce a meaningful time adjustment schedule (yearly groupby needs at
+    # least ~5 records per period).  Fall back to the better-represented driver.
+    _MIN_DRIVER_RATIO = 0.02  # need at least 2% of the other driver's count
+    _MIN_DRIVER_ABS = 20      # or at least 20 records in absolute terms
+    if len(df_impr) < max(_MIN_DRIVER_ABS, int(len(df_land) * _MIN_DRIVER_RATIO)):
+        if len(df_land) >= _MIN_DRIVER_ABS:
+            return "land"
+    if len(df_land) < max(_MIN_DRIVER_ABS, int(len(df_impr) * _MIN_DRIVER_RATIO)):
+        if len(df_impr) >= _MIN_DRIVER_ABS:
+            return "impr"
 
     df_impr[f"sale_price_per_impr_{unit}"] = div_df_z_safe(
         df_impr, "sale_price", f"bldg_area_finished_{unit}"

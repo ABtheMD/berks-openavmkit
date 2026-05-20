@@ -399,6 +399,10 @@ def _run_ratio_study_breakdowns(
     val_date = get_valuation_date(settings)
     look_back_year = val_date.year - look_back_years
 
+    # Ensure sale_year is numeric for comparison (may be category/string from parquet)
+    if "sale_year" in df_sales.columns and not pd.api.types.is_numeric_dtype(df_sales["sale_year"]):
+        df_sales = df_sales.copy()
+        df_sales["sale_year"] = pd.to_numeric(df_sales["sale_year"], errors="coerce").astype("Float64")
     df_sales = df_sales[df_sales["sale_year"].ge(look_back_year)]
 
     # insert "overall" breakdown into the first position:
