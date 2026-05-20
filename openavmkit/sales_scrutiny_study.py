@@ -576,6 +576,10 @@ def run_heuristics(
     unit = area_unit(settings)
     df_sales = get_hydrated_sales_from_sup(sup)
 
+    # Ensure sale_year is numeric (may be category or string with "UNKNOWN" values)
+    if "sale_year" in df_sales.columns and not pd.api.types.is_numeric_dtype(df_sales["sale_year"]):
+        df_sales["sale_year"] = pd.to_numeric(df_sales["sale_year"], errors="coerce").astype("Float64")
+
     #### Multi-parcel sales detection heuristics
     
     jurisdiction = ss.get("jurisdiction", None)

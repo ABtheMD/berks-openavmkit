@@ -53,7 +53,16 @@ def clean_valid_sales(sup: SalesUniversePair, settings: dict) -> SalesUniversePa
     df_sales = sup["sales"].copy()
     df_univ = sup["universe"]
 
+    # Ensure sale_year is numeric (may be category or string with "UNKNOWN" values)
+    if "sale_year" in df_sales.columns and not pd.api.types.is_numeric_dtype(df_sales["sale_year"]):
+        df_sales["sale_year"] = pd.to_numeric(df_sales["sale_year"], errors="coerce").astype("Float64")
+
     # temporarily merge in universe's vacancy status (how the parcel is now)
+    if "is_vacant" not in df_univ.columns:
+        import warnings
+        warnings.warn("is_vacant column missing from universe — defaulting to False")
+        df_univ = df_univ.copy()
+        df_univ["is_vacant"] = False
     df_univ_vacant = (
         df_univ[["key", "is_vacant"]]
         .copy()
@@ -404,14 +413,23 @@ def _fill_unknown_values_per_model_group(df_in: pd.DataFrame, settings: dict):
         # Restore original dtypes before assigning back. The fill logic
         # can change column dtypes (e.g. a Float64 column misclassified
         # as categorical gets converted to string with "UNKNOWN" fill).
-        # For numeric columns, non-numeric fill values become NA.
+        # Only use pd.to_numeric for numeric target dtypes; for non-numeric
+        # targets (object, string, category) use direct astype to avoid
+        # destroying valid string values.
         for col in df_mg.columns:
             if col in df.columns and df_mg[col].dtype != df[col].dtype:
-                try:
-                    df_mg[col] = pd.to_numeric(df_mg[col], errors="coerce").astype(df[col].dtype)
-                except (ValueError, TypeError):
+                target_dtype = df[col].dtype
+                if pd.api.types.is_numeric_dtype(target_dtype):
                     try:
-                        df_mg[col] = df_mg[col].astype(df[col].dtype)
+                        df_mg[col] = pd.to_numeric(df_mg[col], errors="coerce").astype(target_dtype)
+                    except (ValueError, TypeError):
+                        try:
+                            df_mg[col] = df_mg[col].astype(target_dtype)
+                        except (ValueError, TypeError):
+                            pass
+                else:
+                    try:
+                        df_mg[col] = df_mg[col].astype(target_dtype)
                     except (ValueError, TypeError):
                         pass
         try:

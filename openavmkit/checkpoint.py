@@ -6,6 +6,7 @@ import pandas as pd
 import geopandas as gpd
 from shapely import wkb
 
+from openavmkit.utilities._utils import to_parquet_safe
 from openavmkit.utilities.geometry import is_likely_epsg4326
 
 
@@ -121,9 +122,9 @@ def write_checkpoint(data: Any, path: str):
     """
     os.makedirs("out/checkpoints", exist_ok=True)
     if isinstance(data, gpd.GeoDataFrame):
-        data.to_parquet(f"out/checkpoints/{path}.parquet", engine="pyarrow")
+        to_parquet_safe(data, f"out/checkpoints/{path}.parquet", geometry_col="geometry")
     elif hasattr(data, 'to_numpy'):
-        data.to_parquet(f"out/checkpoints/{path}.parquet")
+        to_parquet_safe(data, f"out/checkpoints/{path}.parquet")
     else:
         with open(f"out/checkpoints/{path}.pickle", "wb") as file:
             pickle.dump(data, file)

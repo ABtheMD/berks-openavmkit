@@ -359,8 +359,12 @@ def examine_df_in_ridiculous_detail(df: pd.DataFrame, s: dict):
             for n in nums:
                 fields_noted.append(n)
                 df_non_null = df[~pd.isna(df[n])]
-                non_zero = len(df_non_null[np.abs(df_non_null[n]).gt(0)])
-                    
+                # Guard: column may be category/string despite being classified numeric
+                if hasattr(df[n].dtype, "categories") or not pd.api.types.is_numeric_dtype(df[n]):
+                    non_zero = len(df_non_null)
+                else:
+                    non_zero = len(df_non_null[np.abs(df_non_null[n]).gt(0)])
+
                 if len(df) != 0:
                     perc = non_zero / len(df)
                     non_null = len(df_non_null)
@@ -382,7 +386,10 @@ def examine_df_in_ridiculous_detail(df: pd.DataFrame, s: dict):
             for b in bools:
                 fields_noted.append(b)
                 df_non_null = df[~pd.isna(df[b])]
-                non_zero = len(df_non_null[np.abs(df_non_null[b]).gt(0)])
+                if not pd.api.types.is_numeric_dtype(df[b]) and not pd.api.types.is_bool_dtype(df[b]):
+                    non_zero = len(df_non_null)
+                else:
+                    non_zero = len(df_non_null[np.abs(df_non_null[b]).gt(0)])
                 if len(df) != 0:
                     perc = non_zero / len(df)
                 else:
@@ -597,7 +604,11 @@ def examine_df(df: pd.DataFrame, s: dict):
             for n in nums:
                 fields_noted.append(n)
                 df_non_null = df[~pd.isna(df[n])]
-                non_zero = len(df_non_null[np.abs(df_non_null[n]).gt(0)])
+                # Guard: column may be category/string despite being classified numeric
+                if hasattr(df[n].dtype, "categories") or not pd.api.types.is_numeric_dtype(df[n]):
+                    non_zero = len(df_non_null)
+                else:
+                    non_zero = len(df_non_null[np.abs(df_non_null[n]).gt(0)])
                 if len(df) != 0:
                     perc = non_zero / len(df)
                 else:
@@ -620,7 +631,10 @@ def examine_df(df: pd.DataFrame, s: dict):
             for b in bools:
                 fields_noted.append(b)
                 df_non_null = df[~pd.isna(df[b])]
-                non_zero = len(df_non_null[np.abs(df_non_null[b]).gt(0)])
+                if not pd.api.types.is_numeric_dtype(df[b]) and not pd.api.types.is_bool_dtype(df[b]):
+                    non_zero = len(df_non_null)
+                else:
+                    non_zero = len(df_non_null[np.abs(df_non_null[b]).gt(0)])
                 if len(df) != 0:
                     perc = non_zero / len(df)
                 else:
@@ -1574,6 +1588,8 @@ def identify_outliers(
                 print("----------------------")
                 value_fields = ["sale_price", "prediction", "assr_market_value", "assr_land_value", "assr_impr_value"]
                 for v in value_fields:
+                    if v not in dfm.columns:
+                        continue
                     if "impr" not in v:
                         dfm[f"{v}_land_{unit}"] = div_series_z_safe(dfm[v], dfm[f"land_area_{unit}"])
                     if "land" not in v:
@@ -1581,7 +1597,14 @@ def identify_outliers(
                 
                 dfm_i = dfm[dfm["vacant_sale"].eq(False)]
                 dfm_v = dfm[dfm["vacant_sale"].eq(True)]
-                
+
+                # Guard: skip location-based aggregation if the location column is missing
+                if location is None or location not in dfm.columns:
+                    print(f"  (skipping location-based outlier analysis: '{location}' not in data)")
+                    os.makedirs(outdir, exist_ok=True)
+                    dfm.to_csv(outpath, index=False)
+                    continue
+
                 df_loc_price_i = dfm_i.groupby(location)["sale_price"].agg(["count","median"]).reset_index().rename(columns={
                     "count":"local_impr_sales",
                     "median":"local_impr_price"
@@ -1589,7 +1612,7 @@ def identify_outliers(
                 df_loc_price_is = dfm_i.groupby(location)[f"sale_price_impr_{unit}"].agg(["median"]).reset_index().rename(columns={
                     "median":f"local_impr_price_{unit}"
                 })
-                
+
                 df_loc_price_v = dfm_v.groupby(location)["sale_price"].agg(["count","median"]).reset_index().rename(columns={
                     "count":"local_land_sales",
                     "median":"local_land_price"
@@ -1610,22 +1633,25 @@ def identify_outliers(
                 put_at_front = ["key_sale", deed_id, "address", "prediction_ratio", "prediction", "sale_price"]
                 if mtype == "main":
                     put_at_front += [
-                        f"prediction_impr_{unit}", 
-                        f"sale_price_impr_{unit}", 
-                        f"local_impr_price_{unit}", 
+                        f"prediction_impr_{unit}",
+                        f"sale_price_impr_{unit}",
+                        f"local_impr_price_{unit}",
                         f"local_impr_sales"
                     ]
                 put_at_front += [
-                    f"prediction_land_{unit}", 
-                    f"sale_price_land_{unit}", 
-                    f"local_land_price_{unit}", 
+                    f"prediction_land_{unit}",
+                    f"sale_price_land_{unit}",
+                    f"local_land_price_{unit}",
                     "local_land_sales"
                 ]
                 put_at_end = ["address", location]
-                
+
+                # Filter out None values and columns that don't exist in dfm
+                put_at_front = [c for c in put_at_front if c is not None and c in dfm.columns]
+                put_at_end = [c for c in put_at_end if c is not None and c in dfm.columns]
                 cols = [col for col in cols if col not in put_at_front and col not in put_at_end and col in dfm and col is not None]
                 cols = put_at_front + cols + put_at_end
-                
+
                 dfm = dfm[cols]
                 
                 os.makedirs(outdir, exist_ok=True)
@@ -1977,6 +2003,11 @@ def plot_prediction_vs_sales(
 def _clip_sales_to_use(
     df_sales: pd.DataFrame, settings: dict, verbose: bool = False
 ) -> pd.DataFrame:
+
+    # Ensure sale_year is numeric (may be category or string with "UNKNOWN" values)
+    if "sale_year" in df_sales.columns and not pd.api.types.is_numeric_dtype(df_sales["sale_year"]):
+        df_sales = df_sales.copy()
+        df_sales["sale_year"] = pd.to_numeric(df_sales["sale_year"], errors="coerce").astype("Float64")
 
     val_year = get_valuation_date(settings).year
 

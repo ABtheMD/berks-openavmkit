@@ -42,6 +42,7 @@ from openavmkit.calculations import (
     perform_tweaks,
 )
 from openavmkit.filters import resolve_filter, select_filter
+from openavmkit.utilities._utils import sanitize_df
 from openavmkit.utilities.somers import get_size_in_somers_units_ft
 from openavmkit.utilities.cache import get_cached_df, write_cached_df
 from openavmkit.utilities.data import (
@@ -997,6 +998,8 @@ def get_train_test_keys(df_in: pd.DataFrame, settings: dict):
     for model_group in model_group_ids:
         # Read the split keys for the model group
         test_keys, train_keys = _read_split_keys(model_group)
+        if test_keys is None or train_keys is None:
+            continue
 
         # Filter the DataFrame based on the keys
         mask_test |= df_in["key_sale"].isin(test_keys)
@@ -1037,6 +1040,8 @@ def get_train_test_masks(df_in: pd.DataFrame, settings: dict):
     for model_group in model_group_ids:
         # Read the split keys for the model group
         test_keys, train_keys = _read_split_keys(model_group)
+        if test_keys is None or train_keys is None:
+            continue
 
         # Filter the DataFrame based on the keys
         mask_test |= df_in["key_sale"].isin(test_keys)
@@ -2530,6 +2535,12 @@ def _enrich_vacant(df_in: pd.DataFrame, settings: dict, label:str = "") -> pd.Da
         df.loc[pd.isna(df[f"bldg_area_finished_{unit}"]), f"bldg_area_finished_{unit}"] = 0
         df.loc[df[f"bldg_area_finished_{unit}"].eq(0), "is_vacant"] = True
 
+        # Override: if bldg_value > 0 the parcel has a building regardless of
+        # whether bldg_area_finished_sqft is populated (commercial/industrial
+        # properties often don't report area in this field).
+        if "bldg_value" in df.columns:
+            df.loc[df["bldg_value"].gt(0), "is_vacant"] = False
+
         idx_vacant = df["is_vacant"].eq(True)
 
         # Remove building characteristics from anything that is vacant:
@@ -2537,7 +2548,11 @@ def _enrich_vacant(df_in: pd.DataFrame, settings: dict, label:str = "") -> pd.Da
 
     else:
         warnings.warn(f"You do not have a 'bldg_area_finished_sqft' field for df \"{label}\" -- you really should!")
-        df = df_in
+        # Still create is_vacant so downstream code doesn't crash.
+        # Use bldg_value as a fallback if available; otherwise default to False.
+        df["is_vacant"] = False
+        if "bldg_value" in df.columns:
+            df.loc[df["bldg_value"].eq(0) | df["bldg_value"].isna(), "is_vacant"] = True
 
     return df
 
@@ -3583,6 +3598,11 @@ def load_dataframe(
     if filename == "":
         return None
     filename = f"in/{filename}"
+
+    if not os.path.exists(filename):
+        print(f"  WARNING: {filename} not found — skipping this source")
+        return None
+
     ext = str(filename).split(".")[-1]
 
     column_names = _snoop_column_names(filename)
@@ -4333,7 +4353,11 @@ def _perform_canonical_split(
 
     # Get our sales dataframe for this model group and split it into vacant and improved sales
     df = df_sales_in[df_sales_in["model_group"].eq(model_group)].copy()
-    
+
+    # Ensure sale_year is numeric (may be category or string with "UNKNOWN" values)
+    if "sale_year" in df.columns and not pd.api.types.is_numeric_dtype(df["sale_year"]):
+        df["sale_year"] = pd.to_numeric(df["sale_year"], errors="coerce").astype("Float64")
+
     # Only use sales on or after the use_sales_from year
     if use_sales_from is not None:
         df = df[df["sale_year"].ge(use_sales_from)]
@@ -4635,8 +4659,9 @@ def _read_split_keys(model_group: str):
     train_path = f"{path}/train_keys.csv"
     test_path = f"{path}/test_keys.csv"
     if not os.path.exists(train_path) or not os.path.exists(test_path):
-        warnings.warn(f"Model group:{model_group}")
-        raise ValueError("No split keys found.")
+        warnings.warn(f"Model group '{model_group}': no train/test split keys found at {path}. "
+                       "This group may have too few sales for splitting.")
+        return None, None
     train_keys = pd.read_csv(train_path)["key_sale"].astype(str).values
     test_keys = pd.read_csv(test_path)["key_sale"].astype(str).values
     return test_keys, train_keys
@@ -4689,11 +4714,11 @@ def _tag_model_groups_sup(
 
     if not isinstance(df_univ, gpd.GeoDataFrame):
         df_univ = gpd.GeoDataFrame(df_univ, geometry="geometry")
-    df_univ.to_parquet("out/look/tag-univ-0.parquet")
+    try:
+        df_univ.to_parquet("out/look/tag-univ-0.parquet", engine="pyarrow")
+    except Exception as e:
+        warnings.warn(f"Could not write diagnostic parquet tag-univ-0: {e}")
 
-    if not isinstance(df_univ, gpd.GeoDataFrame):
-        df_univ = gpd.GeoDataFrame(df_univ, geometry="geometry")
-    df_univ.to_parquet("out/look/tag-univ-0.parquet", engine="pyarrow")
     old_model_group = df_univ[["key", "model_group"]]
 
     for mg_id in mg:
@@ -4712,7 +4737,11 @@ def _tag_model_groups_sup(
             df_univ, mg_id, common_area_filters
         )
 
-    df_univ.to_parquet("out/look/tag-univ-1.parquet", engine="pyarrow")
+    try:
+        df_univ.to_parquet("out/look/tag-univ-1.parquet", engine="pyarrow")
+    except Exception as e:
+        warnings.warn(f"Could not write diagnostic parquet tag-univ-1: {e}")
+
     index_changed = ~old_model_group["model_group"].eq(df_univ["model_group"])
     rows_changed = df_univ[index_changed]
     print(f" --> {len(rows_changed)} parcels had their model group changed.")
@@ -5200,7 +5229,7 @@ def write_parquet(df, path):
     
     if not path.endswith(".parquet"):
         raise ValueError("Path must end with .parquet!")
-    
+
     # If it has a geometry column, write as GeoParquet
     if "geometry" in df.columns:
         # Ensure it's a GeoDataFrame
@@ -5210,11 +5239,17 @@ def write_parquet(df, path):
         if gdf.crs is None:
             raise ValueError(f"{path}: geometry has no CRS. Set it (e.g., gdf = gdf.set_crs('EPSG:4326')) before writing.")
 
+        # Sanitize columns (handles mixed-type categoricals, etc.) before writing
+        gdf_san = sanitize_df(gdf, geometry_col="geometry")
+        # Preserve GeoDataFrame type after sanitize_df (which returns a plain DataFrame copy)
+        if not isinstance(gdf_san, gpd.GeoDataFrame):
+            gdf_san = gpd.GeoDataFrame(gdf_san, geometry="geometry", crs=gdf.crs)
         # GeoPandas writes WKB + GeoParquet metadata (including CRS)
-        gdf.to_parquet(path, engine="pyarrow", index=False)
+        gdf_san.to_parquet(path, engine="pyarrow", index=False)
     else:
-        # Regular table
-        df.to_parquet(path, engine="pyarrow", index=False)
+        # Sanitize columns before writing
+        df_san = sanitize_df(df)
+        df_san.to_parquet(path, engine="pyarrow", index=False)
 
 
 def write_gpkg(df, path):

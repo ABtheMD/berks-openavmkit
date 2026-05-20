@@ -38,11 +38,23 @@ def sanitize_df(df : pd.DataFrame, geometry_col: str | None = None):
             continue
         s = df[col]
 
-        # Already good: numeric, bool, datetime, categorical, nullable ints
+        # Categorical columns MUST be checked first (before is_extension_array_dtype,
+        # since CategoricalDtype is an ExtensionDtype and would be skipped otherwise).
+        # Ensure categories are homogeneous for pyarrow.
+        # If categories mix types (e.g. numeric + "UNKNOWN"), convert to string.
+        if isinstance(s.dtype, pd.CategoricalDtype):
+            cats = s.cat.categories
+            if len(cats) > 0:
+                types = set(type(c) for c in cats)
+                if len(types) > 1:
+                    # Mixed-type categories — convert to string for safe parquet serialization
+                    df[col] = s.astype(str).astype("string")
+            continue
+
+        # Already good: numeric, bool, datetime, nullable ints, string
         if (is_integer_dtype(s) or is_float_dtype(s) or
             pd.api.types.is_bool_dtype(s) or
             pd.api.types.is_datetime64_any_dtype(s) or
-            pd.api.types.is_categorical_dtype(s) or
             pd.api.types.is_string_dtype(s) or
             pd.api.types.is_extension_array_dtype(s)):  # covers 'Int64', 'string', etc.
             continue
