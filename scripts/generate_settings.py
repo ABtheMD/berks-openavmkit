@@ -365,6 +365,9 @@ def build_settings(
                 "main": {
                     "run": [
                         "lightgbm",
+                        "mra",
+                        "catboost",
+                        "local_smart_sqft",
                     ],
                 },
                 "time_adjustment": {"period": "Q"},
