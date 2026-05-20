@@ -58,6 +58,11 @@ BLDG_VALUE_PATTERNS = [
     "improvvalue", "improv_value", "imprvalue",
 ]
 
+LOCATION_PATTERNS = [
+    "neighborhood", "location", "nbhd", "nbhood", "neighborhood_code",
+    "loc_code",
+]
+
 # Values larger than this in a numeric column strongly suggest Unix ms (not seconds)
 _MS_THRESHOLD = 1e10  # ~317 years in seconds; any real date > 1970 in ms exceeds this
 
@@ -247,6 +252,27 @@ def build_sales_calcs(sale_price_canonical: str = "sale_price") -> dict:
     }
 
 
+def detect_location_field(
+    schemas: dict[str, list[str]],
+    classified: set[str],
+) -> str | None:
+    """
+    Detect the location/neighborhood field from parquet schemas.
+
+    Returns the first match against LOCATION_PATTERNS that also appears in
+    field_classification, or None.  Preference order follows LOCATION_PATTERNS
+    so ``neighborhood`` wins if both ``neighborhood`` and ``location`` exist.
+    """
+    all_cols: set[str] = set()
+    for cols in schemas.values():
+        all_cols.update(cols)
+    candidates = {c.lower(): c for c in all_cols & classified}
+    for pattern in LOCATION_PATTERNS:
+        if pattern in candidates:
+            return candidates[pattern]
+    return None
+
+
 def build_merge(
     sources: list[dict],
     schemas: dict[str, list[str]],
@@ -257,7 +283,12 @@ def build_merge(
     Build data.process.merge.universe and data.process.merge.sales.
 
     Universe: geo_parcels base + left-join each other source on 'key'.
-    Sales:    sales_handle on 'key_sale' + any cama_residential sources on 'key'.
+    Sales:    sales_handle on 'key_sale' + all CAMA building-data sources on 'key'.
+
+    All sources whose role starts with ``cama_`` (except the sales source
+    itself and geo_parcels, which are already handled) are merged into
+    sales so that building characteristics are available for every property
+    type — residential, commercial, etc.
     """
     universe = [geo_handle]
     for source in sources:
@@ -272,7 +303,7 @@ def build_merge(
         role = source.get("role", "")
         if handle == sales_handle or handle == geo_handle or handle not in schemas:
             continue
-        if role == "cama_residential":
+        if role.startswith("cama_"):
             sales.append({"id": handle, "how": "left", "on": "key"})
 
     return {"universe": universe, "sales": sales}
@@ -430,6 +461,23 @@ def main():
         print(f"  sales:    {merge['sales'][0]['id']} on key_sale")
     else:
         print("\nWARNING: skipping data.process.merge (missing geo or sales source)")
+
+    # ── Auto-detect location field ──────────────────────────────────────────
+    location_field = detect_location_field(schemas, classified)
+    if location_field:
+        template_default = "neighborhood"
+        if location_field != template_default:
+            print(f"\nLocation field detected: '{location_field}' (overriding template default '{template_default}')")
+        else:
+            print(f"\nLocation field detected: '{location_field}'")
+        if "analysis" not in settings:
+            settings["analysis"] = {}
+        for section_key in ("sales_scrutiny", "horizontal_equity"):
+            if section_key not in settings["analysis"]:
+                settings["analysis"][section_key] = {}
+            settings["analysis"][section_key]["location"] = location_field
+    else:
+        print("\nWARNING: could not detect location field — using template default 'neighborhood'")
 
     # ── Report fields not found in any parquet ─────────────────────────────
     all_parquet_cols: set[str] = set()
