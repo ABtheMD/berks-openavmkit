@@ -292,7 +292,7 @@ def patch_settings_json(settings_path: Path, geo_handles: set[str]) -> None:
     if changed:
         with open(settings_path, "w", encoding="utf-8") as fh:
             json.dump(settings, fh, indent=2)
-        print(f"  [✓] Patched settings.json at {settings_path}", file=sys.stderr)
+        print(f"  [ok] Patched settings.json at {settings_path}", file=sys.stderr)
     else:
         print(f"  [~] settings.json already up to date — no changes needed.", file=sys.stderr)
 
@@ -345,7 +345,7 @@ Examples:
     name    = seed["locality"]["name"]
     sources = seed.get("sources", [])
 
-    print(f"\n[✓] Seed loaded : {name} ({slug})", file=sys.stderr)
+    print(f"\n[ok] Seed loaded : {name} ({slug})", file=sys.stderr)
     print(f"    Sources     : {len(sources)}", file=sys.stderr)
 
     # ------------------------------------------------------------------
@@ -377,7 +377,7 @@ Examples:
         url         = source.get("url", "")
         source_type = source.get("type", "")
 
-        print(f"[→] {handle}  (role: {role})", file=sys.stderr)
+        print(f"[>] {handle}  (role: {role})", file=sys.stderr)
 
         if source_type != "feature_server":
             print(
@@ -407,8 +407,8 @@ Examples:
                 gdf = convert_date_columns(gdf, date_cols)
                 gdf.to_parquet(out_file, index=False)
                 print(
-                    f"    [✓] Saved GeoParquet → {out_file}\n"
-                    f"        Rows: {len(gdf):,}  |  Columns: {len(gdf.columns)}  |  CRS: {gdf.crs}",
+                    f"    [ok] Saved GeoParquet -- {out_file}\n"
+                    f"         Rows: {len(gdf):,}  |  Columns: {len(gdf.columns)}  |  CRS: {gdf.crs}",
                     file=sys.stderr,
                 )
             else:
@@ -416,8 +416,8 @@ Examples:
                 df = convert_date_columns(df, date_cols)
                 df.to_parquet(out_file, index=False)
                 print(
-                    f"    [✓] Saved Parquet → {out_file}\n"
-                    f"        Rows: {len(df):,}  |  Columns: {len(df.columns)}",
+                    f"    [ok] Saved Parquet -- {out_file}\n"
+                    f"         Rows: {len(df):,}  |  Columns: {len(df.columns)}",
                     file=sys.stderr,
                 )
         except Exception as exc:
@@ -428,14 +428,14 @@ Examples:
 
     # ------------------------------------------------------------------
     # Patch settings.json if present
-    print("[→] Checking for settings.json to patch...", file=sys.stderr)
+    print("[>] Checking for settings.json to patch...", file=sys.stderr)
     patch_settings_json(out_dir / "settings.json", geo_handles)
 
     # ------------------------------------------------------------------
     # Final summary
     succeeded = len(sources) - len(failed)
     print(
-        f"\n[{'✓' if not failed else '!'}] Done  —  "
+        f"\n[{'ok' if not failed else '!!'}] Done -- "
         f"{succeeded} source(s) saved, {len(failed)} failed.",
         file=sys.stderr,
     )
@@ -444,9 +444,9 @@ Examples:
 
     print(
         f"\n  Next steps:\n"
-        f"    1. Copy your settings.json into {out_dir} if not already there\n"
-        f"       (run: python scripts/generate_settings.py {seed_path})\n"
-        f"    2. Fill in field_classification.important.fields and modeling_groups\n"
+        f"    1. Run  python scripts/configure_settings.py <seed>  to auto-fill\n"
+        f"       load maps, model_groups, and important fields from the downloaded data\n"
+        f"    2. Review the final settings.json in {out_dir}\n"
         f"    3. Open notebooks/pipeline/01-assemble.ipynb and run the pipeline\n",
         file=sys.stderr,
     )

@@ -7,6 +7,8 @@ tests/catboost_info/
 tests/out/
 tests/data/
 notebooks/pipeline/data/**/out/
+notebooks/pipeline/data/**/in/settings.json
+notebooks/pipeline/data/**/in/settings.json.manual_backup
 notebooks/pipeline/data/**/*.parquet
 notebooks/pipeline/data/**/*.geoparquet
 notebooks/pipeline/data/**/*.gpkg

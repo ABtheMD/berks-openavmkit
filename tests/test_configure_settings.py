@@ -72,7 +72,7 @@ def test_build_merge_universe_includes_all_sources():
     assert "cama_commercial" in ids
 
 
-def test_build_merge_sales_includes_residential():
+def test_build_merge_sales_includes_all_cama_sources():
     sources = [
         {"handle": "geo_parcels", "role": "geo_parcels"},
         {"handle": "cama_master", "role": "cama_master"},
@@ -85,8 +85,7 @@ def test_build_merge_sales_includes_residential():
     sales_ids = [e["id"] for e in merge["sales"]]
     assert "cama_master" in sales_ids
     assert "cama_residential" in sales_ids
-    # Commercial should NOT be in sales merge
-    assert "cama_commercial" not in sales_ids
+    assert "cama_commercial" in sales_ids
 
 
 def test_build_merge_sales_residential_joins_on_key():
@@ -101,6 +100,58 @@ def test_build_merge_sales_residential_joins_on_key():
     res_entry = [e for e in merge["sales"] if e["id"] == "cama_residential"][0]
     assert res_entry["on"] == "key"
     assert res_entry["how"] == "left"
+
+
+def test_build_merge_sales_non_cama_excluded():
+    """Non-CAMA sources should not be added to the sales merge."""
+    sources = [
+        {"handle": "geo_parcels", "role": "geo_parcels"},
+        {"handle": "cama_master", "role": "cama_master"},
+        {"handle": "cama_residential", "role": "cama_residential"},
+        {"handle": "permits", "role": "permits"},
+    ]
+    schemas = {h["handle"]: ["col1"] for h in sources}
+    merge = configure_settings.build_merge(sources, schemas, "geo_parcels", "cama_master")
+
+    sales_ids = [e["id"] for e in merge["sales"]]
+    assert "cama_residential" in sales_ids
+    assert "permits" not in sales_ids
+
+
+# ---------------------------------------------------------------------------
+# detect_location_field
+# ---------------------------------------------------------------------------
+
+def test_detect_location_field_neighborhood():
+    schemas = {"src": ["parid", "neighborhood", "class"]}
+    classified = {"parid", "neighborhood", "class"}
+    assert configure_settings.detect_location_field(schemas, classified) == "neighborhood"
+
+
+def test_detect_location_field_location():
+    schemas = {"src": ["parid", "location", "class"]}
+    classified = {"parid", "location", "class"}
+    assert configure_settings.detect_location_field(schemas, classified) == "location"
+
+
+def test_detect_location_field_prefers_neighborhood_over_location():
+    """When both exist, neighborhood wins (earlier in LOCATION_PATTERNS)."""
+    schemas = {"src": ["parid", "neighborhood", "location"]}
+    classified = {"parid", "neighborhood", "location"}
+    assert configure_settings.detect_location_field(schemas, classified) == "neighborhood"
+
+
+def test_detect_location_field_not_classified():
+    """A column must be in field_classification to be detected."""
+    schemas = {"src": ["parid", "location"]}
+    classified = {"parid"}  # location not classified
+    assert configure_settings.detect_location_field(schemas, classified) is None
+
+
+def test_detect_location_field_none_when_absent():
+    schemas = {"src": ["parid", "class"]}
+    classified = {"parid", "class"}
+    assert configure_settings.detect_location_field(schemas, classified) is None
 
 
 def test_build_merge_sales_master_joins_on_key_sale():
